@@ -230,6 +230,64 @@ export function AuthModal({ open, onOpenChange, defaultTab = 'signin' }: AuthMod
               </TabsList>
 
               <TabsContent value="signin" className="mt-5">
+                {/* 1-Click Quick Demo Access */}
+                <div className="mb-5 p-3 rounded-xl bg-white/[0.03] border border-cyan-500/20">
+                  <p className="text-[11px] font-mono text-cyan-300 font-semibold mb-2 flex items-center justify-between">
+                    <span>⚡ Quick Launch Personas</span>
+                    <span className="text-[10px] text-slate-400 font-normal">Instant Demo</span>
+                  </p>
+                  <div className="grid grid-cols-3 gap-2">
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        setIsSubmitting(true);
+                        await signIn('sarah.chen@apex.edu', 'demo1234');
+                        setIsSubmitting(false);
+                        onOpenChange(false);
+                      }}
+                      className="px-2 py-2 rounded-lg bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 text-left transition-colors"
+                    >
+                      <div className="text-[11px] font-semibold text-cyan-300 truncate">🎓 Trainee</div>
+                      <div className="text-[10px] text-slate-400 truncate">Sarah Chen</div>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        setIsSubmitting(true);
+                        await signIn('marcus.vance@apex.edu', 'demo1234');
+                        setIsSubmitting(false);
+                        onOpenChange(false);
+                      }}
+                      className="px-2 py-2 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-left transition-colors"
+                    >
+                      <div className="text-[11px] font-semibold text-amber-300 truncate">📋 Assessor</div>
+                      <div className="text-[10px] text-slate-400 truncate">Marcus Vance</div>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        setIsSubmitting(true);
+                        await signIn('admin@apex.edu', 'demo1234');
+                        setIsSubmitting(false);
+                        onOpenChange(false);
+                      }}
+                      className="px-2 py-2 rounded-lg bg-purple-500/10 hover:bg-purple-500/20 border border-purple-500/30 text-left transition-colors"
+                    >
+                      <div className="text-[11px] font-semibold text-purple-300 truncate">🏛️ Admin</div>
+                      <div className="text-[10px] text-slate-400 truncate">Dr. Rostova</div>
+                    </button>
+                  </div>
+                </div>
+
+                <div className="relative my-4 text-center">
+                  <div className="absolute inset-0 flex items-center">
+                    <span className="w-full border-t border-white/10" />
+                  </div>
+                  <span className="relative bg-[#070a12] px-2 text-[10px] uppercase font-mono text-slate-500">
+                    or continue with credentials
+                  </span>
+                </div>
+
                 <form onSubmit={handleSignIn} className="space-y-4">
                   <div className="space-y-2">
                     <Label htmlFor="signin-email" className="text-xs font-mono text-slate-300">Institutional Email</Label>

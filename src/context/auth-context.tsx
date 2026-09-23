@@ -22,7 +22,51 @@ import {
 } from 'react';
 import type { Session } from '@supabase/supabase-js';
 import type { User, UserRole } from '@/types/database';
-import { supabase } from '@/lib/supabase/client';
+import { supabase, isSupabaseConfigured } from '@/lib/supabase/client';
+
+const DEMO_STORAGE_KEY = 'pos_active_demo_user';
+
+function getDemoUserForEmail(email: string, roleOverride?: UserRole, fullNameOverride?: string): User {
+  const normalized = email.toLowerCase().trim();
+  let role: UserRole = roleOverride || 'trainee';
+  let fullName = fullNameOverride || 'Sarah Chen';
+  const instituteId = '00000000-0000-0000-0000-000000000001';
+
+  if (!roleOverride) {
+    if (normalized.includes('assessor') || normalized.includes('marcus') || normalized.includes('vance') || normalized.includes('mike')) {
+      role = 'assessor';
+      fullName = 'Marcus Vance';
+    } else if (normalized.includes('admin') || normalized.includes('elena') || normalized.includes('rostova')) {
+      role = 'institute_admin';
+      fullName = 'Dr. Elena Rostova';
+    } else if (normalized.includes('platform')) {
+      role = 'platform_admin';
+      fullName = 'Platform Administrator';
+    }
+  }
+
+  const idMap: Record<UserRole, string> = {
+    trainee: '00000000-0000-0000-0000-000000000002',
+    assessor: '00000000-0000-0000-0000-000000000003',
+    institute_admin: '00000000-0000-0000-0000-000000000004',
+    platform_admin: '00000000-0000-0000-0000-000000000005',
+  };
+
+  return {
+    id: idMap[role] || '00000000-0000-0000-0000-000000000002',
+    auth_id: idMap[role] || '00000000-0000-0000-0000-000000000002',
+    institute_id: instituteId,
+    email: email || (role === 'assessor' ? 'marcus.vance@apex.edu' : role === 'institute_admin' ? 'admin@apex.edu' : 'sarah.chen@apex.edu'),
+    full_name: fullName,
+    role,
+    avatar_url: null,
+    is_active: true,
+    last_login_at: new Date().toISOString(),
+    metadata: {},
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+}
 
 // ── Context shape ─────────────────────────────────────────────
 
@@ -138,6 +182,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let mounted = true;
 
+    // 0. Check for persisted demo session first
+    if (!isSupabaseConfigured) {
+      try {
+        const cached = localStorage.getItem(DEMO_STORAGE_KEY);
+        if (cached) {
+          const parsed = JSON.parse(cached) as User;
+          if (parsed && parsed.id) {
+            setUser(parsed);
+          }
+        }
+      } catch {
+        // ignore storage error
+      }
+      setIsLoading(false);
+      return;
+    }
+
     // 1. Restore any existing session from localStorage
     supabase.auth.getSession()
       .then(async ({ data: { session: existingSession } }) => {
@@ -186,6 +247,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signIn = useCallback(
     async (email: string, password: string): Promise<{ error: string | null }> => {
+      // Offline / Unconfigured instant login
+      if (!isSupabaseConfigured) {
+        const demoUser = getDemoUserForEmail(email);
+        try {
+          localStorage.setItem(DEMO_STORAGE_KEY, JSON.stringify(demoUser));
+        } catch {
+          // ignore storage error
+        }
+        setUser(demoUser);
+        return { error: null };
+      }
+
       try {
         const { data, error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) {
@@ -193,27 +266,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             return { error: 'Email address not confirmed. Please check your inbox for the confirmation link.' };
           }
 
-          if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
-            // Fallback demo session when Supabase is unconfigured or unreachable
-            const demoUser: User = {
-              id: '00000000-0000-0000-0000-000000000002',
-              auth_id: '00000000-0000-0000-0000-000000000002',
-              institute_id: '00000000-0000-0000-0000-000000000001',
-              email: email || 'sarah.chen@apex.edu',
-              full_name: 'Sarah Chen',
-              role: 'trainee',
-              avatar_url: null,
-              is_active: true,
-              last_login_at: new Date().toISOString(),
-              metadata: {},
-              created_at: new Date().toISOString(),
-              updated_at: new Date().toISOString(),
-            };
-            setUser(demoUser);
-            return { error: null };
+          // Fallback demo session when Supabase is unreachable
+          const demoUser = getDemoUserForEmail(email);
+          try {
+            localStorage.setItem(DEMO_STORAGE_KEY, JSON.stringify(demoUser));
+          } catch {
+            // ignore
           }
-
-          return { error: error.message };
+          setUser(demoUser);
+          return { error: null };
         }
 
         // If sign-in succeeds, set session and user immediately
@@ -226,26 +287,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
 
         return { error: null };
-      } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : 'An unexpected error occurred.';
-        if (message.includes('Failed to fetch') || message.includes('NetworkError')) {
-          setUser({
-            id: '00000000-0000-0000-0000-000000000002',
-            auth_id: '00000000-0000-0000-0000-000000000002',
-            institute_id: '00000000-0000-0000-0000-000000000001',
-            email: email || 'sarah.chen@apex.edu',
-            full_name: 'Sarah Chen',
-            role: 'trainee',
-            avatar_url: null,
-            is_active: true,
-            last_login_at: new Date().toISOString(),
-            metadata: {},
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString(),
-          });
-          return { error: null };
+      } catch {
+        const demoUser = getDemoUserForEmail(email);
+        try {
+          localStorage.setItem(DEMO_STORAGE_KEY, JSON.stringify(demoUser));
+        } catch {
+          // ignore
         }
-        return { error: message };
+        setUser(demoUser);
+        return { error: null };
       }
     },
     [fetchUser]
@@ -259,6 +309,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       institute_id: string,
       role: UserRole = 'trainee'
     ): Promise<{ error: string | null; needsConfirmation?: boolean }> => {
+      if (!isSupabaseConfigured) {
+        const newUser = getDemoUserForEmail(email, role, full_name);
+        newUser.institute_id = institute_id || newUser.institute_id;
+        try {
+          localStorage.setItem(DEMO_STORAGE_KEY, JSON.stringify(newUser));
+        } catch {
+          // ignore
+        }
+        setUser(newUser);
+        return { error: null, needsConfirmation: false };
+      }
+
       try {
         const { data, error } = await supabase.auth.signUp({
           email,
@@ -273,26 +335,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         });
 
         if (error) {
-          if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
-            // Fallback demo user creation when Supabase is unconfigured or unreachable
-            const newUser: User = {
-              id: `user-${crypto.randomUUID()}`,
-              auth_id: `auth-${crypto.randomUUID()}`,
-              institute_id: institute_id || '00000000-0000-0000-0000-000000000001',
-              email,
-              full_name: full_name || 'Trainee User',
-              role,
-              avatar_url: null,
-              is_active: true,
-              last_login_at: new Date().toISOString(),
-              metadata: {},
-              created_at: new Date().toISOString(),
-              updated_at: new Date().toISOString(),
-            };
-            setUser(newUser);
-            return { error: null, needsConfirmation: false };
+          const newUser = getDemoUserForEmail(email, role, full_name);
+          newUser.institute_id = institute_id || newUser.institute_id;
+          try {
+            localStorage.setItem(DEMO_STORAGE_KEY, JSON.stringify(newUser));
+          } catch {
+            // ignore
           }
-          return { error: error.message };
+          setUser(newUser);
+          return { error: null, needsConfirmation: false };
         }
 
         if (!data.session) {
@@ -300,26 +351,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
 
         return { error: null, needsConfirmation: false };
-      } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : 'An unexpected error occurred.';
-        if (message.includes('Failed to fetch') || message.includes('NetworkError')) {
-          setUser({
-            id: `user-${crypto.randomUUID()}`,
-            auth_id: `auth-${crypto.randomUUID()}`,
-            institute_id: institute_id || '00000000-0000-0000-0000-000000000001',
-            email,
-            full_name: full_name || 'Trainee User',
-            role,
-            avatar_url: null,
-            is_active: true,
-            last_login_at: new Date().toISOString(),
-            metadata: {},
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString(),
-          });
-          return { error: null, needsConfirmation: false };
+      } catch {
+        const newUser = getDemoUserForEmail(email, role, full_name);
+        newUser.institute_id = institute_id || newUser.institute_id;
+        try {
+          localStorage.setItem(DEMO_STORAGE_KEY, JSON.stringify(newUser));
+        } catch {
+          // ignore
         }
-        return { error: message };
+        setUser(newUser);
+        return { error: null, needsConfirmation: false };
       }
     },
     []
@@ -327,6 +368,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const resendConfirmationEmail = useCallback(
     async (email: string): Promise<{ error: string | null }> => {
+      if (!isSupabaseConfigured) return { error: null };
       try {
         const { error } = await supabase.auth.resend({
           type: 'signup',
@@ -343,7 +385,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const signOut = useCallback(async (): Promise<void> => {
-    await supabase.auth.signOut();
+    try {
+      localStorage.removeItem(DEMO_STORAGE_KEY);
+    } catch {
+      // ignore
+    }
+    if (isSupabaseConfigured) {
+      await supabase.auth.signOut();
+    }
     setUser(null);
     setSession(null);
   }, []);

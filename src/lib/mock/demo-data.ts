@@ -3,7 +3,12 @@
 // Single consolidated demo data source gated behind VITE_DEMO_MODE.
 // ─────────────────────────────────────────────────────────────
 
-export const IS_DEMO_MODE = import.meta.env.VITE_DEMO_MODE !== 'false';
+import { isSupabaseConfigured } from '@/lib/supabase/client';
+
+export const IS_DEMO_MODE =
+  import.meta.env.VITE_DEMO_MODE === 'true' ||
+  !isSupabaseConfigured ||
+  import.meta.env.VITE_DEMO_MODE !== 'false';
 
 export const DEMO_CERTIFICATE = {
   id: 'cert-001-demo',

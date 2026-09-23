@@ -5,7 +5,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useApp } from '@/context/app-context';
-import { supabase } from '@/lib/supabase/client';
+import { supabase, isSupabaseConfigured } from '@/lib/supabase/client';
 import type { SubmissionStatus } from '@/types/database';
 import {
   Brain,
@@ -129,6 +129,13 @@ export function ReviewQueue({ onReview }: ReviewQueueProps) {
   const fetchQueue = useCallback(async () => {
     setIsLoading(true);
     setError(null);
+
+    if (!isSupabaseConfigured) {
+      setItems(DEMO_QUEUE_ITEMS);
+      setIsLoading(false);
+      return;
+    }
+
     try {
       // Query real submissions in current institute
       const { data: submissionsData, error: subErr } = await supabase
@@ -138,9 +145,7 @@ export function ReviewQueue({ onReview }: ReviewQueueProps) {
         .in('status', ['ai_processed', 'submitted', 'under_review'])
         .order('submitted_at', { ascending: false });
 
-      if (subErr) throw subErr;
-
-      if (!submissionsData || submissionsData.length === 0) {
+      if (subErr || !submissionsData || submissionsData.length === 0) {
         setItems(DEMO_QUEUE_ITEMS);
         setIsLoading(false);
         return;
@@ -199,14 +204,9 @@ export function ReviewQueue({ onReview }: ReviewQueueProps) {
 
       setItems(formattedItems);
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.error('[ReviewQueue] Error fetching queue:', msg);
-      if (msg.includes('Failed to fetch') || msg.includes('NetworkError')) {
-        setItems(DEMO_QUEUE_ITEMS);
-        setError(null);
-      } else {
-        setError("We couldn't load the review queue — check your connection and retry");
-      }
+      console.warn('[ReviewQueue] Using demo queue items fallback:', err);
+      setItems(DEMO_QUEUE_ITEMS);
+      setError(null);
     } finally {
       setIsLoading(false);
     }

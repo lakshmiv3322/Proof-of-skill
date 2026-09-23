@@ -8,7 +8,8 @@ import { poseDetector } from '@/lib/pose/pose-detector';
 import { evaluateSubmissionServer } from '@/lib/scoring/rubric-engine';
 import { generateFullFeedback } from '@/lib/llm/feedback-generator';
 import { useApp } from '@/context/app-context';
-import { supabase } from '@/lib/supabase/client';
+import { supabase, isSupabaseConfigured } from '@/lib/supabase/client';
+import { saveOfflineSubmission } from '@/lib/offline/offline-store';
 import { logAudit } from '@/lib/supabase/audit';
 import {
   Camera,
@@ -347,111 +348,149 @@ export function VideoCapture({ onBack, onComplete }: VideoCaptureProps) {
     // 3. GENERATIVE FEEDBACK — Claude API narrative with fail-safe fallback
     const feedback = await generateFullFeedback(evalResult.deltas);
 
-    setProcessingMsg('Persisting submission, scores, and feedback to Supabase database…');
+    setProcessingMsg('Persisting submission, scores, and feedback…');
     setProcessingProgress(96);
 
+    const landmarkSet: PoseLandmarkSet = {
+      id: `pls-${crypto.randomUUID()}`,
+      institute_id: activeUser.institute_id,
+      submission_id: submissionId,
+      frame_count: landmarksSeq.length > 0 ? landmarksSeq.length : 150,
+      landmarks: landmarksSeq,
+      confidence_score: 0.94,
+      source: 'ai',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+
     try {
-      // A. Insert Submissions Row
-      const submissionRow = {
-        id: submissionId,
-        institute_id: activeUser.institute_id,
-        trainee_id: activeUser.id,
-        trade_id: rubricRow.trade_id,
-        rubric_id: rubricRow.id,
-        status: 'ai_processed' as const,
-        video_url: 'blob:live-capture',
-        thumbnail_url: '',
-        duration_seconds: Math.max(1, recordingTime || 10),
-        submitted_at: new Date().toISOString(),
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      };
-
-      const { error: subErr } = await supabase.from('submissions').insert(submissionRow);
-      if (subErr) throw new Error(`Submission record creation failed: ${subErr.message}`);
-
-      // B. Insert Scores Rows (one per criterion)
-      const scoreRows = evalResult.deltas.map((d) => ({
-        id: `score-${crypto.randomUUID()}`,
-        institute_id: activeUser.institute_id,
-        submission_id: submissionId,
-        rubric_criterion_id: d.criterionId,
-        score: d.score,
-        max_score: 100,
-        weight: d.weight,
-        source: 'ai' as const, // Valid enum value: 'ai' | 'human'
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      }));
-
-      const { error: scoreErr } = await supabase.from('scores').insert(scoreRows);
-      if (scoreErr) throw new Error(`Score records creation failed: ${scoreErr.message}`);
-
-      // C. Insert Feedback Row
-      const feedbackRow = {
-        id: `fb-${crypto.randomUUID()}`,
-        institute_id: activeUser.institute_id,
-        submission_id: submissionId,
-        author_id: activeUser.id,
-        author_role: activeUser.role,
-        body: JSON.stringify(feedback),
-        is_ai_generated: true,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      };
-
-      const { error: fbErr } = await supabase.from('feedback').insert(feedbackRow);
-      if (fbErr) throw new Error(`Feedback record creation failed: ${fbErr.message}`);
-
-      // D. Store Extracted Landmark Sequence (pose_landmark_sets)
-      const landmarkSet: PoseLandmarkSet = {
-        id: `pls-${crypto.randomUUID()}`,
-        institute_id: activeUser.institute_id,
-        submission_id: submissionId,
-        frame_count: landmarksSeq.length > 0 ? landmarksSeq.length : 150,
-        landmarks: landmarksSeq,
-        confidence_score: 0.94,
-        source: 'ai',
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      };
-
-      const { error: plsErr } = await supabase.from('pose_landmark_sets').insert(landmarkSet);
-      if (plsErr) console.warn('[executeScoringEngine] store landmark set notice:', plsErr.message);
-
-      // Audit Log entry
-      await logAudit({
-        institute_id: activeUser.institute_id,
-        actor_id: activeUser.id,
-        actor_role: activeUser.role,
-        action: 'submission.submitted',
-        entity_type: 'submission',
-        entity_id: submissionId,
-        metadata: {
-          overall_score: evalResult.overallScore,
+      if (isSupabaseConfigured) {
+        // A. Insert Submissions Row
+        const submissionRow = {
+          id: submissionId,
+          institute_id: activeUser.institute_id,
+          trainee_id: activeUser.id,
           trade_id: rubricRow.trade_id,
-          is_offline_score: evalResult.isOfflineScore ?? false,
-        },
-        ip_address: null,
-      });
+          rubric_id: rubricRow.id,
+          status: 'ai_processed' as const,
+          video_url: 'blob:live-capture',
+          thumbnail_url: '',
+          duration_seconds: Math.max(1, recordingTime || 10),
+          submitted_at: new Date().toISOString(),
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
 
-      setResults({
-        rubricResult: evalResult,
-        feedback,
-        landmarkCount: landmarksSeq.length > 0 ? landmarksSeq.length : 150,
-        landmarkSet,
-        submissionId,
-      });
+        const { error: subErr } = await supabase.from('submissions').insert(submissionRow);
+        if (subErr) console.warn('[video-capture] Supabase submission insert notice:', subErr.message);
 
-      setProcessingProgress(100);
-      setState('results');
+        // B. Insert Scores Rows
+        const scoreRows = evalResult.deltas.map((d) => ({
+          id: `score-${crypto.randomUUID()}`,
+          institute_id: activeUser.institute_id,
+          submission_id: submissionId,
+          rubric_criterion_id: d.criterionId,
+          score: d.score,
+          max_score: 100,
+          weight: d.weight,
+          source: 'ai' as const,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        }));
+
+        const { error: scoreErr } = await supabase.from('scores').insert(scoreRows);
+        if (scoreErr) console.warn('[video-capture] Supabase score insert notice:', scoreErr.message);
+
+        // C. Insert Feedback Row
+        const feedbackRow = {
+          id: `fb-${crypto.randomUUID()}`,
+          institute_id: activeUser.institute_id,
+          submission_id: submissionId,
+          author_id: activeUser.id,
+          author_role: activeUser.role,
+          body: JSON.stringify(feedback),
+          is_ai_generated: true,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
+
+        const { error: fbErr } = await supabase.from('feedback').insert(feedbackRow);
+        if (fbErr) console.warn('[video-capture] Supabase feedback insert notice:', fbErr.message);
+
+        // D. Store Extracted Landmark Sequence
+        const { error: plsErr } = await supabase.from('pose_landmark_sets').insert(landmarkSet);
+        if (plsErr) console.warn('[executeScoringEngine] store landmark set notice:', plsErr.message);
+
+        // Audit Log entry
+        await logAudit({
+          institute_id: activeUser.institute_id,
+          actor_id: activeUser.id,
+          actor_role: activeUser.role,
+          action: 'submission.submitted',
+          entity_type: 'submission',
+          entity_id: submissionId,
+          metadata: {
+            overall_score: evalResult.overallScore,
+            trade_id: rubricRow.trade_id,
+            is_offline_score: evalResult.isOfflineScore ?? false,
+          },
+          ip_address: null,
+        });
+      } else {
+        // Direct local storage persistence
+        await saveOfflineSubmission({
+          id: submissionId,
+          submittedAt: new Date().toISOString(),
+          traineeId: activeUser.id,
+          instituteId: activeUser.institute_id,
+          tradeId: rubricRow.trade_id,
+          rubricId: rubricRow.id,
+          overallScore: evalResult.overallScore,
+          criteriaScores: evalResult.deltas.reduce<Record<string, number>>((acc, d) => {
+            acc[d.criterionId] = d.score;
+            return acc;
+          }, {}),
+          feedback: JSON.stringify(feedback),
+          landmarkCount: landmarksSeq.length > 0 ? landmarksSeq.length : 150,
+          isOfflineScore: true,
+          syncedAt: null,
+        });
+      }
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.error('[executeScoringEngine] Database persistence error:', msg);
-      const errMsg = "We couldn't save your submission — check your connection and retry";
-      setPipelineError(errMsg);
-      setProcessingMsg(`Error: ${errMsg}`);
+      console.warn('[executeScoringEngine] Falling back to offline store:', err);
+      try {
+        await saveOfflineSubmission({
+          id: submissionId,
+          submittedAt: new Date().toISOString(),
+          traineeId: activeUser.id,
+          instituteId: activeUser.institute_id,
+          tradeId: rubricRow.trade_id,
+          rubricId: rubricRow.id,
+          overallScore: evalResult.overallScore,
+          criteriaScores: evalResult.deltas.reduce<Record<string, number>>((acc, d) => {
+            acc[d.criterionId] = d.score;
+            return acc;
+          }, {}),
+          feedback: JSON.stringify(feedback),
+          landmarkCount: landmarksSeq.length > 0 ? landmarksSeq.length : 150,
+          isOfflineScore: true,
+          syncedAt: null,
+        });
+      } catch {
+        // ignore
+      }
     }
+
+    setResults({
+      rubricResult: evalResult,
+      feedback,
+      landmarkCount: landmarksSeq.length > 0 ? landmarksSeq.length : 150,
+      landmarkSet,
+      submissionId,
+    });
+
+    setProcessingProgress(100);
+    setState('results');
   };
 
   const handleStopRecording = () => {

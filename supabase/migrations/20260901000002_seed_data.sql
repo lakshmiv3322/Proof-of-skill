@@ -1,5 +1,5 @@
 -- -------------------------------------------------------------
--- ProofOfSkill — Seed Data & Anon Institute Policy
+-- ProofOfSkill ï¿½ Seed Data & Anon Institute Policy
 -- File: supabase/migrations/20260901000002_seed_data.sql
 -- -------------------------------------------------------------
 

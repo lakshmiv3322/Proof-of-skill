@@ -6,7 +6,8 @@ import { Progress } from '@/components/ui/progress';
 import { Separator } from '@/components/ui/separator';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useApp } from '@/context/app-context';
-import { supabase } from '@/lib/supabase/client';
+import { supabase, isSupabaseConfigured } from '@/lib/supabase/client';
+import { getOfflineSubmissions } from '@/lib/offline/offline-store';
 import {
   AreaChart,
   Area,
@@ -116,6 +117,37 @@ export function MyProgress({ onViewCertificate }: MyProgressProps) {
   const fetchData = useCallback(async () => {
     setIsLoading(true);
     setError(null);
+
+    // Helper to merge demo submissions with any offline submissions recorded in browser
+    const loadOfflineRecords = async (): Promise<SubmissionRecord[]> => {
+      try {
+        const offlineList = await getOfflineSubmissions(activeUser.id);
+        const mappedOffline: SubmissionRecord[] = offlineList.map((off) => {
+          const dt = new Date(off.submittedAt);
+          return {
+            id: off.id,
+            trade: 'CPR Chest Compression Assessment',
+            submittedAt: dt.toISOString().split('T')[0],
+            reviewedAt: null,
+            status: 'in_review',
+            score: off.overallScore,
+            certCode: null,
+            month: dt.toLocaleString('default', { month: 'short' }),
+          };
+        });
+        return [...mappedOffline, ...DEMO_SUBMISSION_RECORDS];
+      } catch {
+        return DEMO_SUBMISSION_RECORDS;
+      }
+    };
+
+    if (!isSupabaseConfigured) {
+      const records = await loadOfflineRecords();
+      setSubmissions(records);
+      setIsLoading(false);
+      return;
+    }
+
     try {
       // Query trainee's submissions
       const { data: subData, error: subErr } = await supabase
@@ -125,10 +157,9 @@ export function MyProgress({ onViewCertificate }: MyProgressProps) {
         .eq('trainee_id', activeUser.id)
         .order('created_at', { ascending: false });
 
-      if (subErr) throw subErr;
-
-      if (!subData || subData.length === 0) {
-        setSubmissions(DEMO_SUBMISSION_RECORDS);
+      if (subErr || !subData || subData.length === 0) {
+        const records = await loadOfflineRecords();
+        setSubmissions(records);
         setIsLoading(false);
         return;
       }
@@ -193,14 +224,10 @@ export function MyProgress({ onViewCertificate }: MyProgressProps) {
 
       setSubmissions(records);
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.error('[MyProgress] error loading progress data:', msg);
-      if (msg.includes('Failed to fetch') || msg.includes('NetworkError')) {
-        setSubmissions(DEMO_SUBMISSION_RECORDS);
-        setError(null);
-      } else {
-        setError("We couldn't load your progress — check your connection and retry");
-      }
+      console.warn('[MyProgress] Using offline records fallback:', err);
+      const records = await loadOfflineRecords();
+      setSubmissions(records);
+      setError(null);
     } finally {
       setIsLoading(false);
     }

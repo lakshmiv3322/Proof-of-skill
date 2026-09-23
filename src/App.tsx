@@ -34,25 +34,42 @@ function AppLoadingFallback() {
 function parseVerifyRoute(): string | null {
   if (typeof window === 'undefined') return null;
 
-  const path = window.location.pathname;
-  if (path.startsWith('/verify/')) {
-    const code = path.replace('/verify/', '').trim();
-    if (code) return decodeURIComponent(code);
-  } else if (path === '/verify') {
-    return 'POS-CPR-2026-042AH';
-  }
+  try {
+    const path = window.location.pathname || '';
+    if (path.startsWith('/verify/')) {
+      const code = path.replace('/verify/', '').trim();
+      if (code) {
+        try {
+          return decodeURIComponent(code);
+        } catch {
+          return code;
+        }
+      }
+    } else if (path === '/verify') {
+      return 'POS-CPR-2026-042AH';
+    }
 
-  // Support hash routing or query params e.g. #/verify/POS-... or ?verify=POS-...
-  const searchParams = new URLSearchParams(window.location.search);
-  const verifyParam = searchParams.get('verify') || searchParams.get('code');
-  if (verifyParam) return verifyParam;
+    // Support hash routing or query params e.g. #/verify/POS-... or ?verify=POS-...
+    const search = window.location.search || '';
+    const searchParams = new URLSearchParams(search);
+    const verifyParam = searchParams.get('verify') || searchParams.get('code');
+    if (verifyParam) return verifyParam;
 
-  const hash = window.location.hash;
-  if (hash.startsWith('#/verify/')) {
-    const code = hash.replace('#/verify/', '').trim();
-    if (code) return decodeURIComponent(code);
-  } else if (hash === '#/verify') {
-    return 'POS-CPR-2026-042AH';
+    const hash = window.location.hash || '';
+    if (hash.startsWith('#/verify/')) {
+      const code = hash.replace('#/verify/', '').trim();
+      if (code) {
+        try {
+          return decodeURIComponent(code);
+        } catch {
+          return code;
+        }
+      }
+    } else if (hash === '#/verify') {
+      return 'POS-CPR-2026-042AH';
+    }
+  } catch {
+    return null;
   }
 
   return null;

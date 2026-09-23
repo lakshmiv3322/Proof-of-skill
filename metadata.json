@@ -1,0 +1,6 @@
+{
+  "name": "ProofOfSkill — Biometric Skill Verification & Verifiable Credentials",
+  "description": "ProofOfSkill converts physical human motion capture into deterministic DTW rubric scores and immutable, cryptographically verifiable certificates.",
+  "permissions": [],
+  "capabilities": []
+}

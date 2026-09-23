@@ -85,24 +85,106 @@ const ACTION_CONFIG: Record<
   },
 };
 
+const DEMO_AUDIT_LOGS: AuditLog[] = [
+  {
+    id: 'audit-001',
+    institute_id: '00000000-0000-0000-0000-000000000001',
+    actor_id: '00000000-0000-0000-0000-000000000003',
+    actor_role: 'assessor',
+    action: 'certificate.issued',
+    entity_type: 'certificate',
+    entity_id: 'cert-cpr-001',
+    metadata: {
+      submission_id: 'sub-0000-0001',
+      verification_code: 'POS-CPR-2026-892AH',
+      overall_score: 94.2,
+      state_before: { submission_status: 'under_review' },
+      state_after: { submission_status: 'certified', verification_code: 'POS-CPR-2026-892AH' },
+    },
+    ip_address: '192.168.1.42',
+    created_at: new Date(Date.now() - 1000 * 60 * 18).toISOString(),
+  },
+  {
+    id: 'audit-002',
+    institute_id: '00000000-0000-0000-0000-000000000001',
+    actor_id: '00000000-0000-0000-0000-000000000003',
+    actor_role: 'assessor',
+    action: 'score.override',
+    entity_type: 'score',
+    entity_id: 'score-override-002',
+    metadata: {
+      submission_id: 'sub-0000-0002',
+      criterion_id: 'crit-cpr-recoil',
+      previous_score: 81,
+      new_score: 88,
+      reason: 'Recoil was obscured by rescuer hand angle; video confirmed chest wall returned to baseline.',
+      state_before: { score: 81 },
+      state_after: { score: 88 },
+    },
+    ip_address: '192.168.1.42',
+    created_at: new Date(Date.now() - 1000 * 60 * 45).toISOString(),
+  },
+  {
+    id: 'audit-003',
+    institute_id: '00000000-0000-0000-0000-000000000001',
+    actor_id: '00000000-0000-0000-0000-000000000004',
+    actor_role: 'institute_admin',
+    action: 'rubric.config_updated',
+    entity_type: 'rubric',
+    entity_id: 'rubric-cpr-2026',
+    metadata: {
+      rubric_name: 'AHA CPR Standard 2026',
+      version: '2.1.0',
+      state_before: { compression_rate: { min: 100, max: 120 } },
+      state_after: { compression_rate: { min: 100, max: 120, tolerance: 2 } },
+    },
+    ip_address: '10.0.0.15',
+    created_at: new Date(Date.now() - 1000 * 60 * 180).toISOString(),
+  },
+  {
+    id: 'audit-004',
+    institute_id: '00000000-0000-0000-0000-000000000001',
+    actor_id: '00000000-0000-0000-0000-000000000002',
+    actor_role: 'trainee',
+    action: 'submission.submitted',
+    entity_type: 'submission',
+    entity_id: 'sub-0000-0001',
+    metadata: {
+      overall_score: 93.8,
+      trade_id: 'trade-cpr',
+      is_offline_score: false,
+    },
+    ip_address: '172.16.0.8',
+    created_at: new Date(Date.now() - 1000 * 60 * 240).toISOString(),
+  },
+];
+
 export function AuditLogExplorer() {
   const { db } = useApp();
-  const [logs, setLogs] = useState<AuditLog[]>([]);
+  const [logs, setLogs] = useState<AuditLog[]>(DEMO_AUDIT_LOGS);
   const [users, setUsers] = useState<User[]>([]);
 
   useEffect(() => {
-    db.from('audit_log')
-      .select('*')
-      .order('created_at', { ascending: false })
-      .then(({ data }) => {
-        if (data) setLogs(data as AuditLog[]);
-      });
+    async function loadData() {
+      try {
+        const { data: logData } = await db
+          .from('audit_log')
+          .select('*')
+          .order('created_at', { ascending: false });
+        if (logData && logData.length > 0) setLogs(logData as AuditLog[]);
+      } catch {
+        // use default demo logs
+      }
 
-    db.from('users')
-      .select('*')
-      .then(({ data }) => {
-        if (data) setUsers(data as User[]);
-      });
+      try {
+        const { data: userData } = await db.from('users').select('*');
+        if (userData && userData.length > 0) setUsers(userData as User[]);
+      } catch {
+        // ignore
+      }
+    }
+
+    loadData();
   }, [db]);
 
   const userMap = useMemo(

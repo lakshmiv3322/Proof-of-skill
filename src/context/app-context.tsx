@@ -21,12 +21,15 @@ import {
   type ReactNode,
 } from 'react';
 import type { User, UserRole } from '@/types/database';
-import { supabase } from '@/lib/supabase/client';
+import { supabase, isSupabaseConfigured } from '@/lib/supabase/client';
 import { useAuth } from '@/context/auth-context';
 
 // ── Demo mode flag ────────────────────────────────────────────
-// Defaults to true in web builds unless explicitly disabled via VITE_DEMO_MODE="false"
-export const DEMO_MODE = import.meta.env.VITE_DEMO_MODE !== 'false';
+// Active when explicitly set to true, or when Supabase is not configured, or by default
+export const DEMO_MODE =
+  import.meta.env.VITE_DEMO_MODE === 'true' ||
+  !isSupabaseConfigured ||
+  import.meta.env.VITE_DEMO_MODE !== 'false';
 
 // Fallback demo user profiles per role for zero-config offline evaluations
 const DEMO_PERSONA_USERS: Record<UserRole, User> = {

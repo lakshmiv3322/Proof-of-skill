@@ -1,0 +1,10 @@
+﻿<svg xmlns=" http://www.w3.org/2000/svg\ width=\1200\ height=\630\ viewBox=\0 0 1200 630\ fill=\none\>
+ <rect width=\1200\ height=\630\ fill=\#090d16\/>
+ <rect x=\40\ y=\40\ width=\1120\ height=\550\ rx=\24\ fill=\#0f172a\ stroke=\#1e293b\ stroke-width=\2\/>
+ <path d=\M180 160L120 184V226C120 265.6 145.8 302.2 180 310C214.2 302.2 240 265.6 240 226V184L180 160Z\ stroke=\#10b981\ stroke-width=\12\ stroke-linejoin=\round\ fill=\#10b981\ fill-opacity=\0.12\/>
+ <path d=\M150 232L171 253L210 214\ stroke=\#10b981\ stroke-width=\13\ stroke-linecap=\round\ stroke-linejoin=\round\/>
+ <text x=\280\ y=\220\ fill=\#ffffff\ font-family=\system-ui -apple-system sans-serif\ font-size=\64\ font-weight=\800\ letter-spacing=\-0.02em\>ProofOfSkill</text>
+ <text x=\280\ y=\280\ fill=\#10b981\ font-family=\system-ui -apple-system sans-serif\ font-size=\28\ font-weight=\600\ letter-spacing=\0.05em\>AI-ASSISTED SKILL ASSESSMENT &amp; VERIFIABLE CREDENTIALS</text>
+ <text x=\120\ y=\420\ fill=\#94a3b8\ font-family=\system-ui -apple-system sans-serif\ font-size=\32\ font-weight=\400\>Deterministic motion tracking, rubric-based scoring, and tamper-proof certificates.</text>
+ <text x=\120\ y=\470\ fill=\#64748b\ font-family=\system-ui -apple-system sans-serif\ font-size=\26\ font-weight=\400\>Built for trade schools, vocational programs, and enterprise health training.</text>
+</svg>

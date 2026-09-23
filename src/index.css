@@ -1,0 +1,141 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 224 50% 5%;       /* Deep Void #070a12 */
+    --foreground: 214 32% 95%;       /* Crisp White #f1f5f9 */
+    --card: 222 47% 10%;             /* Dark Glass Panel */
+    --card-foreground: 214 32% 95%;
+    --popover: 222 47% 9%;
+    --popover-foreground: 214 32% 95%;
+    --primary: 184 100% 50%;         /* Electric Laser Cyan #00f0ff */
+    --primary-foreground: 224 50% 5%;
+    --secondary: 224 40% 14%;
+    --secondary-foreground: 214 32% 95%;
+    --muted: 223 35% 15%;
+    --muted-foreground: 215 20% 65%; /* Muted Slate #94a3b8 */
+    --accent: 271 91% 65%;           /* Electric Violet #a855f7 */
+    --accent-foreground: 214 32% 95%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 214 32% 95%;
+    --border: 224 35% 16%;
+    --input: 224 35% 16%;
+    --ring: 184 100% 50%;
+    --radius: 0.75rem;
+
+    --chart-1: 184 100% 50%;
+    --chart-2: 271 91% 65%;
+    --chart-3: 38 92% 50%;
+    --chart-4: 160 84% 45%;
+    --chart-5: 0 84% 60%;
+  }
+
+  .dark {
+    --background: 224 50% 5%;
+    --foreground: 214 32% 95%;
+    --card: 222 47% 10%;
+    --card-foreground: 214 32% 95%;
+    --popover: 222 47% 9%;
+    --popover-foreground: 214 32% 95%;
+    --primary: 184 100% 50%;
+    --primary-foreground: 224 50% 5%;
+    --secondary: 224 40% 14%;
+    --secondary-foreground: 214 32% 95%;
+    --muted: 223 35% 15%;
+    --muted-foreground: 215 20% 65%;
+    --accent: 271 91% 65%;
+    --accent-foreground: 214 32% 95%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 214 32% 95%;
+    --border: 224 35% 16%;
+    --input: 224 35% 16%;
+    --ring: 184 100% 50%;
+
+    --chart-1: 184 100% 50%;
+    --chart-2: 271 91% 65%;
+    --chart-3: 38 92% 50%;
+    --chart-4: 160 84% 45%;
+    --chart-5: 0 84% 60%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground font-sans;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-headline tracking-tight;
+  }
+  html {
+    scroll-behavior: smooth;
+  }
+  :focus-visible {
+    outline: 2px solid hsl(var(--primary));
+    outline-offset: 2px;
+  }
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+  .bg-grid {
+    background-image:
+      linear-gradient(to right, rgba(255, 255, 255, 0.04) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(255, 255, 255, 0.04) 1px, transparent 1px);
+    background-size: 32px 32px;
+  }
+  .bg-dots {
+    background-image: radial-gradient(rgba(255, 255, 255, 0.08) 1px, transparent 1px);
+    background-size: 20px 20px;
+  }
+  .glass-panel {
+    background: rgba(13, 20, 36, 0.65);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+  }
+  .glass-card {
+    background: linear-gradient(135deg, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0.01) 100%), rgba(13, 20, 36, 0.7);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid rgba(255, 255, 255, 0.09);
+  }
+  .glass-card:hover {
+    border-color: rgba(0, 240, 255, 0.3);
+    box-shadow: 0 10px 30px -10px rgba(0, 240, 255, 0.15);
+  }
+  .ambient-glow-cyan {
+    background: radial-gradient(circle at center, rgba(0, 240, 255, 0.18) 0%, transparent 70%);
+  }
+  .ambient-glow-violet {
+    background: radial-gradient(circle at center, rgba(168, 85, 247, 0.18) 0%, transparent 70%);
+  }
+  .ambient-glow-amber {
+    background: radial-gradient(circle at center, rgba(245, 158, 11, 0.15) 0%, transparent 70%);
+  }
+  .text-gradient-cyan-violet {
+    @apply bg-clip-text text-transparent bg-gradient-to-r from-[#00f0ff] via-[#818cf8] to-[#c084fc];
+  }
+  .text-gradient-amber-ember {
+    @apply bg-clip-text text-transparent bg-gradient-to-r from-[#fbbf24] via-[#f59e0b] to-[#f97316];
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

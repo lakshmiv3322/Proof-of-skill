@@ -337,18 +337,61 @@ export function VideoCapture({ onBack, onComplete }: VideoCaptureProps) {
     setProcessingMsg('Executing server-side deterministic DTW scoring engine…');
     setProcessingProgress(85);
 
-    const submissionId = `sub-${crypto.randomUUID()}`;
+    let stagingId: string | undefined;
+    const clientGeneratedSubmissionId = `sub-${crypto.randomUUID()}`;
 
-    // 2. DETERMINISTIC SCORING — Evaluates real landmark sequence (Edge function source of truth with fallback)
-    const evalResult = await evaluateSubmissionServer(submissionId, rubricConfig, landmarksSeq);
+    // 1. Stage raw unverified telemetry into `submission_staging`
+    if (isSupabaseConfigured) {
+      try {
+        const { data: stageData, error: stageErr } = await supabase
+          .from('submission_staging')
+          .insert({
+            institute_id: activeUser.institute_id,
+            trainee_id: activeUser.id,
+            trade_id: rubricRow.trade_id,
+            rubric_id: rubricRow.id,
+            video_url: 'blob:live-capture',
+            duration_seconds: Math.max(1, recordingTime || 10),
+            raw_landmarks: landmarksSeq,
+            status: 'pending',
+          })
+          .select('id')
+          .single();
+
+        if (!stageErr && stageData) {
+          stagingId = stageData.id;
+        }
+      } catch (e) {
+        console.info('[video-capture] Telemetry staging notice:', e);
+      }
+    }
+
+    // 2. SERVER-AUTHORITATIVE DETERMINISTIC SCORING
+    // The server Edge Function verifies landmarks, computes DTW, and exclusively writes to submissions & scores via service_role.
+    const evalResult = await evaluateSubmissionServer(
+      clientGeneratedSubmissionId,
+      rubricConfig,
+      landmarksSeq,
+      {
+        stagingId,
+        tradeId: rubricRow.trade_id,
+        rubricId: rubricRow.id,
+        videoUrl: 'blob:live-capture',
+        durationSeconds: Math.max(1, recordingTime || 10),
+        traineeId: activeUser.id,
+        instituteId: activeUser.institute_id,
+      }
+    );
+
+    const submissionId = evalResult.submissionId || clientGeneratedSubmissionId;
 
     setProcessingMsg('Generating AI coaching feedback narrative…');
     setProcessingProgress(92);
 
-    // 3. GENERATIVE FEEDBACK — Claude API narrative with fail-safe fallback
+    // 3. GENERATIVE FEEDBACK — AI coaching feedback narrative based on server deltas
     const feedback = await generateFullFeedback(evalResult.deltas);
 
-    setProcessingMsg('Persisting submission, scores, and feedback…');
+    setProcessingMsg('Finalizing assessment results…');
     setProcessingProgress(96);
 
     const landmarkSet: PoseLandmarkSet = {
@@ -363,101 +406,9 @@ export function VideoCapture({ onBack, onComplete }: VideoCaptureProps) {
       updated_at: new Date().toISOString(),
     };
 
-    try {
-      if (isSupabaseConfigured) {
-        // A. Insert Submissions Row
-        const submissionRow = {
-          id: submissionId,
-          institute_id: activeUser.institute_id,
-          trainee_id: activeUser.id,
-          trade_id: rubricRow.trade_id,
-          rubric_id: rubricRow.id,
-          status: 'ai_processed' as const,
-          video_url: 'blob:live-capture',
-          thumbnail_url: '',
-          duration_seconds: Math.max(1, recordingTime || 10),
-          submitted_at: new Date().toISOString(),
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        };
-
-        const { error: subErr } = await supabase.from('submissions').insert(submissionRow);
-        if (subErr) console.warn('[video-capture] Supabase submission insert notice:', subErr.message);
-
-        // B. Insert Scores Rows
-        const scoreRows = evalResult.deltas.map((d) => ({
-          id: `score-${crypto.randomUUID()}`,
-          institute_id: activeUser.institute_id,
-          submission_id: submissionId,
-          rubric_criterion_id: d.criterionId,
-          score: d.score,
-          max_score: 100,
-          weight: d.weight,
-          source: 'ai' as const,
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        }));
-
-        const { error: scoreErr } = await supabase.from('scores').insert(scoreRows);
-        if (scoreErr) console.warn('[video-capture] Supabase score insert notice:', scoreErr.message);
-
-        // C. Insert Feedback Row
-        const feedbackRow = {
-          id: `fb-${crypto.randomUUID()}`,
-          institute_id: activeUser.institute_id,
-          submission_id: submissionId,
-          author_id: activeUser.id,
-          author_role: activeUser.role,
-          body: JSON.stringify(feedback),
-          is_ai_generated: true,
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        };
-
-        const { error: fbErr } = await supabase.from('feedback').insert(feedbackRow);
-        if (fbErr) console.warn('[video-capture] Supabase feedback insert notice:', fbErr.message);
-
-        // D. Store Extracted Landmark Sequence
-        const { error: plsErr } = await supabase.from('pose_landmark_sets').insert(landmarkSet);
-        if (plsErr) console.warn('[executeScoringEngine] store landmark set notice:', plsErr.message);
-
-        // Audit Log entry
-        await logAudit({
-          institute_id: activeUser.institute_id,
-          actor_id: activeUser.id,
-          actor_role: activeUser.role,
-          action: 'submission.submitted',
-          entity_type: 'submission',
-          entity_id: submissionId,
-          metadata: {
-            overall_score: evalResult.overallScore,
-            trade_id: rubricRow.trade_id,
-            is_offline_score: evalResult.isOfflineScore ?? false,
-          },
-          ip_address: null,
-        });
-      } else {
-        // Direct local storage persistence
-        await saveOfflineSubmission({
-          id: submissionId,
-          submittedAt: new Date().toISOString(),
-          traineeId: activeUser.id,
-          instituteId: activeUser.institute_id,
-          tradeId: rubricRow.trade_id,
-          rubricId: rubricRow.id,
-          overallScore: evalResult.overallScore,
-          criteriaScores: evalResult.deltas.reduce<Record<string, number>>((acc, d) => {
-            acc[d.criterionId] = d.score;
-            return acc;
-          }, {}),
-          feedback: JSON.stringify(feedback),
-          landmarkCount: landmarksSeq.length > 0 ? landmarksSeq.length : 150,
-          isOfflineScore: true,
-          syncedAt: null,
-        });
-      }
-    } catch (err: unknown) {
-      console.warn('[executeScoringEngine] Falling back to offline store:', err);
+    // Client does NOT write directly to submissions or scores (blocked by strict RLS).
+    // In local demo or offline mode, persist to local storage cache for seamless display.
+    if (!isSupabaseConfigured || evalResult.isOfflineScore) {
       try {
         await saveOfflineSubmission({
           id: submissionId,
@@ -476,8 +427,8 @@ export function VideoCapture({ onBack, onComplete }: VideoCaptureProps) {
           isOfflineScore: true,
           syncedAt: null,
         });
-      } catch {
-        // ignore
+      } catch (err) {
+        console.warn('[video-capture] Offline storage fallback notice:', err);
       }
     }
 

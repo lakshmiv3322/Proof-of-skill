@@ -48,6 +48,7 @@ DROP POLICY IF EXISTS "reference_clips_select_tenant" ON reference_clips;
 DROP POLICY IF EXISTS "reference_clips_write_staff" ON reference_clips;
 DROP POLICY IF EXISTS "pose_landmark_sets_select_tenant" ON pose_landmark_sets;
 DROP POLICY IF EXISTS "pose_landmark_sets_insert_trainee" ON pose_landmark_sets;
+DROP POLICY IF EXISTS "pose_landmark_sets_write_staff" ON pose_landmark_sets;
 DROP POLICY IF EXISTS "appeals_select_trainee" ON appeals;
 DROP POLICY IF EXISTS "appeals_select_staff" ON appeals;
 DROP POLICY IF EXISTS "appeals_insert_trainee" ON appeals;
@@ -57,6 +58,7 @@ DROP POLICY IF EXISTS "usage_counters_select_admin" ON usage_counters;
 DROP POLICY IF EXISTS "submissions_select_trainee" ON submissions;
 DROP POLICY IF EXISTS "submissions_select_staff" ON submissions;
 DROP POLICY IF EXISTS "submissions_insert_trainee" ON submissions;
+DROP POLICY IF EXISTS "submissions_write_staff" ON submissions;
 DROP POLICY IF EXISTS "submissions_update_trainee" ON submissions;
 DROP POLICY IF EXISTS "submissions_update_staff" ON submissions;
 DROP POLICY IF EXISTS "submissions_delete_trainee" ON submissions;
@@ -78,6 +80,50 @@ DROP POLICY IF EXISTS "certificates_write_admin" ON certificates;
 DROP POLICY IF EXISTS "audit_log_select_admin" ON audit_log;
 DROP POLICY IF EXISTS "audit_log_insert_authenticated" ON audit_log;
 DROP POLICY IF EXISTS "audit_log_insert_service_role" ON audit_log;
+
+DROP POLICY IF EXISTS "submission_staging_insert_trainee" ON submission_staging;
+DROP POLICY IF EXISTS "submission_staging_select_trainee" ON submission_staging;
+DROP POLICY IF EXISTS "submission_staging_select_staff" ON submission_staging;
+
+-- ─────────────────────────────────────────────────────────────
+-- SUBMISSION STAGING TABLE (Raw video & unverified landmark captures)
+-- Trainees upload raw sensor telemetry here; scoring engine computes
+-- authoritative results server-side before writing to `submissions` / `scores`.
+-- ─────────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS public.submission_staging (
+  id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  institute_id     uuid NOT NULL REFERENCES public.institutes(id) ON DELETE CASCADE,
+  trainee_id       uuid NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
+  trade_id         uuid NOT NULL REFERENCES public.trades(id) ON DELETE CASCADE,
+  rubric_id        uuid NOT NULL REFERENCES public.rubrics(id) ON DELETE CASCADE,
+  video_url        text NOT NULL DEFAULT '',
+  duration_seconds integer NOT NULL DEFAULT 0,
+  raw_landmarks    jsonb NOT NULL DEFAULT '[]'::jsonb,
+  status           text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'processing', 'completed', 'failed')),
+  error_message    text,
+  created_at       timestamptz DEFAULT now() NOT NULL
+);
+
+ALTER TABLE public.submission_staging ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "submission_staging_insert_trainee" ON public.submission_staging
+  FOR INSERT TO authenticated
+  WITH CHECK (
+    trainee_id = public.current_user_id()
+    AND institute_id = public.current_user_institute_id()
+  );
+
+CREATE POLICY "submission_staging_select_trainee" ON public.submission_staging
+  FOR SELECT TO authenticated
+  USING (trainee_id = public.current_user_id());
+
+CREATE POLICY "submission_staging_select_staff" ON public.submission_staging
+  FOR SELECT TO authenticated
+  USING (
+    institute_id = public.current_user_institute_id()
+    AND public.current_user_role() IN ('assessor', 'institute_admin', 'platform_admin')
+  );
 
 -- ─────────────────────────────────────────────────────────────
 -- REFINED STRICT RLS POLICIES FOR ALL 13 TABLES
@@ -131,11 +177,14 @@ CREATE POLICY "submissions_select_staff" ON submissions
     AND public.current_user_role() IN ('assessor', 'institute_admin', 'platform_admin')
   );
 
-CREATE POLICY "submissions_insert_trainee" ON submissions
+-- Trainee DIRECT insert removed: Trainees must stage captures into `submission_staging`.
+-- Authoritative submissions are created exclusively by the server Edge Function (service_role)
+-- or certified staff.
+CREATE POLICY "submissions_write_staff" ON submissions
   FOR INSERT TO authenticated
   WITH CHECK (
-    trainee_id = public.current_user_id()
-    AND institute_id = public.current_user_institute_id()
+    institute_id = public.current_user_institute_id()
+    AND public.current_user_role() IN ('assessor', 'institute_admin', 'platform_admin')
   );
 
 CREATE POLICY "submissions_update_trainee" ON submissions
@@ -161,6 +210,8 @@ CREATE POLICY "submissions_delete_trainee" ON submissions
   );
 
 -- POSE LANDMARK SETS TABLE
+-- Trainees can view their own extracted landmarks once processed.
+-- Trainee direct INSERT is removed to prevent spoofed landmark sets.
 CREATE POLICY "pose_landmark_sets_select_tenant" ON pose_landmark_sets
   FOR SELECT TO authenticated
   USING (
@@ -171,17 +222,17 @@ CREATE POLICY "pose_landmark_sets_select_tenant" ON pose_landmark_sets
     )
   );
 
-CREATE POLICY "pose_landmark_sets_insert_trainee" ON pose_landmark_sets
-  FOR INSERT TO authenticated
-  WITH CHECK (
-    EXISTS (
-      SELECT 1 FROM submissions s
-      WHERE s.id = pose_landmark_sets.submission_id
-        AND s.trainee_id = public.current_user_id()
-    )
+CREATE POLICY "pose_landmark_sets_write_staff" ON pose_landmark_sets
+  FOR ALL TO authenticated
+  USING (
+    institute_id = public.current_user_institute_id()
+    AND public.current_user_role() IN ('assessor', 'institute_admin', 'platform_admin')
   );
 
 -- SCORES TABLE
+-- Trainees can view their own scores.
+-- Trainee DIRECT INSERT is strictly forbidden: only server Edge Function (service_role)
+-- or authorized assessors/admins can write scores.
 CREATE POLICY "scores_select_trainee" ON scores
   FOR SELECT TO authenticated
   USING (
@@ -197,17 +248,6 @@ CREATE POLICY "scores_select_staff" ON scores
   USING (
     institute_id = public.current_user_institute_id()
     AND public.current_user_role() IN ('assessor', 'institute_admin', 'platform_admin')
-  );
-
-CREATE POLICY "scores_insert_trainee" ON scores
-  FOR INSERT TO authenticated
-  WITH CHECK (
-    institute_id = public.current_user_institute_id()
-    AND EXISTS (
-      SELECT 1 FROM submissions s
-      WHERE s.id = scores.submission_id
-        AND s.trainee_id = public.current_user_id()
-    )
   );
 
 CREATE POLICY "scores_write_staff" ON scores

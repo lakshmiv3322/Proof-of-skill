@@ -163,6 +163,16 @@ export function evaluateSubmissionWithLandmarks(
   };
 }
 
+export interface ServerScorePayloadOptions {
+  tradeId?: string;
+  rubricId?: string;
+  stagingId?: string;
+  videoUrl?: string;
+  durationSeconds?: number;
+  traineeId?: string;
+  instituteId?: string;
+}
+
 /**
  * Server-side Edge Function invoker with local deterministic fallback.
  * Edge Function is the source of truth for tamper-resistant certification scores.
@@ -170,22 +180,41 @@ export function evaluateSubmissionWithLandmarks(
 export async function evaluateSubmissionServer(
   submissionId: string,
   rubricConfig: RubricConfig,
-  landmarks?: PoseLandmark[]
-): Promise<RubricResult> {
+  landmarks?: PoseLandmark[],
+  options?: ServerScorePayloadOptions
+): Promise<RubricResult & { submissionId?: string }> {
   try {
     const { data, error } = await supabase.functions.invoke('score-submission', {
-      body: { submissionId, rubricConfig, landmarks },
+      body: {
+        submissionId,
+        rubricConfig,
+        landmarks,
+        tradeId: options?.tradeId,
+        rubricId: options?.rubricId,
+        stagingId: options?.stagingId,
+        videoUrl: options?.videoUrl,
+        durationSeconds: options?.durationSeconds,
+        traineeId: options?.traineeId,
+        instituteId: options?.instituteId,
+      },
     });
 
     if (!error && data && data.overallScore !== undefined) {
-      return { ...(data as RubricResult), isOfflineScore: false };
+      return {
+        ...(data as RubricResult),
+        submissionId: data.submissionId || submissionId,
+        isOfflineScore: false,
+      };
     }
   } catch (err) {
     console.info('[RubricEngine] Edge Function score-submission falling back to local computation:', err);
   }
 
   // Local fallback (flagged as unverified/offline score)
-  return evaluateSubmissionWithLandmarks(submissionId, rubricConfig, landmarks);
+  return {
+    ...evaluateSubmissionWithLandmarks(submissionId, rubricConfig, landmarks),
+    submissionId,
+  };
 }
 
 /**

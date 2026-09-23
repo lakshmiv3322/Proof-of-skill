@@ -77,6 +77,24 @@ const ACTION_CONFIG: Record<
     color: 'text-emerald-500',
     badge: 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20',
   },
+  'certificate.status_changed': {
+    label: 'Certificate Status Changed',
+    icon: Award,
+    color: 'text-amber-500',
+    badge: 'bg-amber-500/10 text-amber-500 border-amber-500/20',
+  },
+  'submission.status_changed': {
+    label: 'Submission Status Changed',
+    icon: CheckCircle2,
+    color: 'text-indigo-500',
+    badge: 'bg-indigo-500/10 text-indigo-500 border-indigo-500/20',
+  },
+  'score.created': {
+    label: 'Score Created (AI)',
+    icon: Layers,
+    color: 'text-purple-500',
+    badge: 'bg-purple-500/10 text-purple-500 border-purple-500/20',
+  },
   'submission.approved': {
     label: 'Submission Approved',
     icon: CheckCircle2,
@@ -330,8 +348,9 @@ export function AuditLogExplorer() {
               <SelectContent>
                 <SelectItem value="all">All Actions</SelectItem>
                 <SelectItem value="score.override">Score Overrides</SelectItem>
-                <SelectItem value="submission.submitted">Submissions</SelectItem>
-                <SelectItem value="submission.scored">AI Scoring</SelectItem>
+                <SelectItem value="score.created">AI Score Created</SelectItem>
+                <SelectItem value="submission.submitted">Submissions Uploaded</SelectItem>
+                <SelectItem value="submission.status_changed">Submission Status Changed</SelectItem>
                 <SelectItem value="rubric.config_updated">Rubric Updates</SelectItem>
                 <SelectItem value="certificate.issued">Certificates Issued</SelectItem>
               </SelectContent>

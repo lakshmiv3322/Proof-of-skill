@@ -1,4 +1,4 @@
-﻿// ─────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
 // src/lib/offline/offline-store.ts
 // Lightweight IndexedDB persistence layer for offline resilience.
 //
@@ -20,13 +20,15 @@ export interface OfflineSubmission {
   criteriaScores: Record<string, number>;
   feedback: string;            // JSON-serialised FullFeedback
   landmarkCount: number;
+  videoUrl?: string;
   isOfflineScore: true;
   syncedAt: string | null;     // null until Supabase ack
 }
 
 const DB_NAME    = 'proofofskill_v1';
 const STORE_NAME = 'offline_submissions';
-const DB_VERSION = 1;
+const VIDEO_STORE_NAME = 'offline_videos';
+const DB_VERSION = 2;
 
 // ── Open / init DB ────────────────────────────────────────────
 
@@ -45,10 +47,66 @@ function openDB(): Promise<IDBDatabase> {
         store.createIndex('syncedAt',    'syncedAt',    { unique: false });
         store.createIndex('submittedAt', 'submittedAt', { unique: false });
       }
+      if (!db.objectStoreNames.contains(VIDEO_STORE_NAME)) {
+        db.createObjectStore(VIDEO_STORE_NAME, { keyPath: 'submissionId' });
+      }
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror   = () => reject(req.error);
   });
+}
+
+// ── Save / Get video blob offline ────────────────────────────
+
+export async function saveOfflineVideo(submissionId: string, blob: Blob): Promise<void> {
+  try {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(VIDEO_STORE_NAME, 'readwrite');
+      const store = tx.objectStore(VIDEO_STORE_NAME);
+      const req = store.put({ submissionId, blob, createdAt: new Date().toISOString() });
+      req.onsuccess = () => resolve();
+      req.onerror = () => reject(req.error);
+    });
+  } catch (err) {
+    console.warn('[OfflineStore] Failed to save video blob to IndexedDB:', err);
+  }
+}
+
+export async function getOfflineVideo(submissionId: string): Promise<Blob | null> {
+  try {
+    const db = await openDB();
+    return new Promise((resolve) => {
+      const tx = db.transaction(VIDEO_STORE_NAME, 'readonly');
+      const store = tx.objectStore(VIDEO_STORE_NAME);
+      const req = store.get(submissionId);
+      req.onsuccess = () => {
+        if (req.result && req.result.blob) {
+          resolve(req.result.blob as Blob);
+        } else {
+          resolve(null);
+        }
+      };
+      req.onerror = () => resolve(null);
+    });
+  } catch {
+    return null;
+  }
+}
+
+export async function getOfflineSubmission(id: string): Promise<OfflineSubmission | null> {
+  try {
+    const db = await openDB();
+    return new Promise((resolve) => {
+      const tx = db.transaction(STORE_NAME, 'readonly');
+      const store = tx.objectStore(STORE_NAME);
+      const req = store.get(id);
+      req.onsuccess = () => resolve((req.result as OfflineSubmission) || null);
+      req.onerror = () => resolve(null);
+    });
+  } catch {
+    return null;
+  }
 }
 
 // ── Save a submission result offline ─────────────────────────

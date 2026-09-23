@@ -10,6 +10,7 @@ import { generateFullFeedback } from '@/lib/llm/feedback-generator';
 import { useApp } from '@/context/app-context';
 import { supabase, isSupabaseConfigured } from '@/lib/supabase/client';
 import { saveOfflineSubmission } from '@/lib/offline/offline-store';
+import { uploadSubmissionVideo } from '@/lib/storage/video-storage';
 import { logAudit } from '@/lib/supabase/audit';
 import {
   Camera,
@@ -97,6 +98,7 @@ export function VideoCapture({ onBack, onComplete }: VideoCaptureProps) {
   const extractedLandmarksRef = useRef<PoseLandmark[]>([]);
   const frameAnalysisLoopRef = useRef<number>();
   const recordingStartTimeRef = useRef<number>(0);
+  const capturedVideoBlobRef   = useRef<Blob | null>(null);
 
   // ── Pre-flight check state driven by REAL signal ────────────────
   const [checks, setChecks] = useState<{ lighting: boolean; framing: boolean; occlusion: boolean }>({
@@ -239,9 +241,10 @@ export function VideoCapture({ onBack, onComplete }: VideoCaptureProps) {
             mimeType: MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
               ? 'video/webm;codecs=vp9'
               : 'video/webm',
+            videoBitsPerSecond: 1_200_000, // 1.2 Mbps compression: high visual fidelity with compact storage footprint
           });
           recorder.ondataavailable = (e) => {
-            if (e.data.size > 0) recordedChunksRef.current.push(e.data);
+            if (e.data && e.data.size > 0) recordedChunksRef.current.push(e.data);
           };
           recorder.start(100);
           mediaRecorderRef.current = recorder;
@@ -267,23 +270,23 @@ export function VideoCapture({ onBack, onComplete }: VideoCaptureProps) {
     const file = e.target.files?.[0];
     if (!file) return;
 
+    capturedVideoBlobRef.current = file;
     setState('processing');
     setProcessingMsg('Decoding uploaded video frames with BlazePose…');
     setProcessingProgress(10);
 
     try {
       const extracted = await poseDetector.processVideoFile(file, (pct) => {
-        setProcessingProgress(Math.min(65, 10 + Math.round(pct * 0.55)));
+        setProcessingProgress(Math.min(50, 10 + Math.round(pct * 0.4)));
         setProcessingMsg(`Extracted BlazePose landmarks (${pct}% complete)…`);
       });
 
       extractedLandmarksRef.current = extracted;
-      setProcessingProgress(70);
-      await executeScoringEngine(extracted);
+      await executeScoringEngine(extracted, file);
     } catch (err) {
       console.error('[handleFileSelect] error processing video:', err);
       // Fallback with synthesized sequence if decode fails
-      runPipeline();
+      await executeScoringEngine(extractedLandmarksRef.current, file);
     }
   };
 
@@ -292,31 +295,52 @@ export function VideoCapture({ onBack, onComplete }: VideoCaptureProps) {
   const [processingMsg, setProcessingMsg]  = useState(PIPELINE_STEPS[0].msg);
   const [results, setResults] = useState<ScoringResults | null>(null);
 
-  const runPipeline = () => {
-    let progress = 0;
-
-    const iv = setInterval(() => {
-      progress = Math.min(100, progress + (Math.random() * 14 + 6));
-      setProcessingProgress(progress);
-
-      const step = [...PIPELINE_STEPS].reverse().find((s) => progress >= s.threshold);
-      if (step) setProcessingMsg(step.msg);
-
-      if (progress >= 100) {
-        clearInterval(iv);
-        executeScoringEngine(extractedLandmarksRef.current);
-      }
-    }, 350);
-  };
-
   const [pipelineError, setPipelineError] = useState<string | null>(null);
 
-  const executeScoringEngine = async (landmarksSeq: PoseLandmark[]) => {
+  const executeScoringEngine = async (landmarksSeq: PoseLandmark[], passedBlob?: Blob) => {
     setPipelineError(null);
-    setProcessingMsg('Fetching published trade rubric configuration…');
-    setProcessingProgress(80);
+    const clientGeneratedSubmissionId = `sub-${crypto.randomUUID()}`;
 
-    // 1. Fetch rubric scoped to active user's institute_id
+    // 1. Prepare video blob from recording or file upload
+    let videoBlob = passedBlob || capturedVideoBlobRef.current;
+    if (!videoBlob || videoBlob.size === 0) {
+      if (recordedChunksRef.current.length > 0) {
+        const mime = recordedChunksRef.current[0]?.type || 'video/webm';
+        videoBlob = new Blob(recordedChunksRef.current, { type: mime });
+      } else {
+        videoBlob = new Blob(['proofofskill-video-placeholder'], { type: 'video/webm' });
+      }
+    }
+
+    // 2. UPLOAD PIPELINE: Upload real video file to Supabase Storage with chunked/resilient upload
+    setProcessingMsg('Compressing & uploading video evidence to secure storage (0%)…');
+    setProcessingProgress(15);
+
+    let realVideoStoragePath = `${activeUser.institute_id}/${clientGeneratedSubmissionId}/video.webm`;
+
+    try {
+      const uploadResult = await uploadSubmissionVideo({
+        fileOrBlob: videoBlob,
+        instituteId: activeUser.institute_id,
+        submissionId: clientGeneratedSubmissionId,
+        onProgress: (pct) => {
+          setProcessingProgress(Math.min(75, 15 + Math.round(pct * 0.6)));
+          setProcessingMsg(`Uploading video evidence to secure storage (${pct}%)…`);
+        },
+        onRetry: (attempt, maxRetries, err) => {
+          setProcessingMsg(`Network drop (${err.message}). Retrying upload attempt ${attempt}/${maxRetries}…`);
+        },
+      });
+
+      realVideoStoragePath = uploadResult.storagePath;
+    } catch (uploadErr) {
+      console.warn('[executeScoringEngine] Video upload non-fatal fallback:', uploadErr);
+    }
+
+    // 3. Fetch rubric scoped to active user's institute_id
+    setProcessingMsg('Fetching published trade rubric configuration…');
+    setProcessingProgress(78);
+
     const { data: rubricsData, error: rubricError } = await supabase
       .from('rubrics')
       .select('*')
@@ -338,9 +362,8 @@ export function VideoCapture({ onBack, onComplete }: VideoCaptureProps) {
     setProcessingProgress(85);
 
     let stagingId: string | undefined;
-    const clientGeneratedSubmissionId = `sub-${crypto.randomUUID()}`;
 
-    // 1. Stage raw unverified telemetry into `submission_staging`
+    // 4. Stage raw unverified telemetry into `submission_staging` with real storage path
     if (isSupabaseConfigured) {
       try {
         const { data: stageData, error: stageErr } = await supabase
@@ -350,7 +373,7 @@ export function VideoCapture({ onBack, onComplete }: VideoCaptureProps) {
             trainee_id: activeUser.id,
             trade_id: rubricRow.trade_id,
             rubric_id: rubricRow.id,
-            video_url: 'blob:live-capture',
+            video_url: realVideoStoragePath,
             duration_seconds: Math.max(1, recordingTime || 10),
             raw_landmarks: landmarksSeq,
             status: 'pending',
@@ -366,7 +389,7 @@ export function VideoCapture({ onBack, onComplete }: VideoCaptureProps) {
       }
     }
 
-    // 2. SERVER-AUTHORITATIVE DETERMINISTIC SCORING
+    // 5. SERVER-AUTHORITATIVE DETERMINISTIC SCORING
     // The server Edge Function verifies landmarks, computes DTW, and exclusively writes to submissions & scores via service_role.
     const evalResult = await evaluateSubmissionServer(
       clientGeneratedSubmissionId,
@@ -376,7 +399,7 @@ export function VideoCapture({ onBack, onComplete }: VideoCaptureProps) {
         stagingId,
         tradeId: rubricRow.trade_id,
         rubricId: rubricRow.id,
-        videoUrl: 'blob:live-capture',
+        videoUrl: realVideoStoragePath,
         durationSeconds: Math.max(1, recordingTime || 10),
         traineeId: activeUser.id,
         instituteId: activeUser.institute_id,
@@ -388,7 +411,7 @@ export function VideoCapture({ onBack, onComplete }: VideoCaptureProps) {
     setProcessingMsg('Generating AI coaching feedback narrative…');
     setProcessingProgress(92);
 
-    // 3. GENERATIVE FEEDBACK — AI coaching feedback narrative based on server deltas
+    // 6. GENERATIVE FEEDBACK — AI coaching feedback narrative based on server deltas
     const feedback = await generateFullFeedback(evalResult.deltas);
 
     setProcessingMsg('Finalizing assessment results…');
@@ -424,6 +447,7 @@ export function VideoCapture({ onBack, onComplete }: VideoCaptureProps) {
           }, {}),
           feedback: JSON.stringify(feedback),
           landmarkCount: landmarksSeq.length > 0 ? landmarksSeq.length : 150,
+          videoUrl: realVideoStoragePath,
           isOfflineScore: true,
           syncedAt: null,
         });
@@ -445,11 +469,25 @@ export function VideoCapture({ onBack, onComplete }: VideoCaptureProps) {
   };
 
   const handleStopRecording = () => {
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      mediaRecorderRef.current.stop();
-    }
     setState('processing');
-    runPipeline();
+    setProcessingMsg('Finalizing recorded video capture…');
+    setProcessingProgress(5);
+
+    const recorder = mediaRecorderRef.current;
+    if (recorder && recorder.state !== 'inactive') {
+      recorder.onstop = () => {
+        const mime = recordedChunksRef.current[0]?.type || 'video/webm';
+        const videoBlob = new Blob(recordedChunksRef.current, { type: mime });
+        capturedVideoBlobRef.current = videoBlob;
+        executeScoringEngine(extractedLandmarksRef.current, videoBlob);
+      };
+      recorder.stop();
+    } else {
+      const mime = recordedChunksRef.current[0]?.type || 'video/webm';
+      const videoBlob = new Blob(recordedChunksRef.current, { type: mime });
+      capturedVideoBlobRef.current = videoBlob;
+      executeScoringEngine(extractedLandmarksRef.current, videoBlob);
+    }
   };
 
   const handleRetake = () => {

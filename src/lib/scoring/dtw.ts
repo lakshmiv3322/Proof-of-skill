@@ -18,6 +18,10 @@ export interface DTWResult {
   postureVarianceScore: number;
   /** Raw dynamic time warping distance between wrist trajectory curves. */
   rawDtwDistance: number;
+  /** Indicates whether the uncalibrated fallback constant was used instead of anatomical normalization. */
+  anatomicalScaleFallback?: boolean;
+  /** Explanatory warning message for assessors when fallback scaling was triggered. */
+  anatomicalScaleWarning?: string;
 }
 
 export interface TraineeKinematics {
@@ -26,6 +30,9 @@ export interface TraineeKinematics {
   estimatedDepthCm: number;
   recoilIncompletePct: number;
   postureAngleDeviationDeg: number;
+  anatomicalScaleFallback?: boolean;
+  anatomicalScaleWarning?: string;
+  anatomicalScaleType?: 'shoulder_width' | 'torso_length' | 'default';
 }
 
 /**
@@ -122,6 +129,8 @@ export interface AnatomicalScale {
   cmPerUnit: number;
   referenceType: 'shoulder_width' | 'torso_length' | 'default';
   scaleDistance: number;
+  isFallback: boolean;
+  fallbackReason?: string;
 }
 
 /**
@@ -130,7 +139,13 @@ export interface AnatomicalScale {
  */
 export function computeAnatomicalScaleReference(landmarks: PoseLandmark[]): AnatomicalScale {
   if (!landmarks || landmarks.length === 0) {
-    return { cmPerUnit: 195, referenceType: 'default', scaleDistance: 0 };
+    return {
+      cmPerUnit: 195,
+      referenceType: 'default',
+      scaleDistance: 0,
+      isFallback: true,
+      fallbackReason: 'No landmark sequence provided; uncalibrated default scale used.',
+    };
   }
 
   let totalShoulderDist = 0;
@@ -184,6 +199,7 @@ export function computeAnatomicalScaleReference(landmarks: PoseLandmark[]): Anat
       cmPerUnit: STANDARD_BIACROMIAL_WIDTH_CM / avgShoulderDist,
       referenceType: 'shoulder_width',
       scaleDistance: avgShoulderDist,
+      isFallback: false,
     };
   }
 
@@ -193,10 +209,17 @@ export function computeAnatomicalScaleReference(landmarks: PoseLandmark[]): Anat
       cmPerUnit: STANDARD_TORSO_LENGTH_CM / avgTorsoDist,
       referenceType: 'torso_length',
       scaleDistance: avgTorsoDist,
+      isFallback: false,
     };
   }
 
-  return { cmPerUnit: 195, referenceType: 'default', scaleDistance: 0 };
+  return {
+    cmPerUnit: 195,
+    referenceType: 'default',
+    scaleDistance: 0,
+    isFallback: true,
+    fallbackReason: 'Torso/shoulder landmarks occluded, cropped, or low confidence (<0.25); using fixed scale fallback.',
+  };
 }
 
 /**
@@ -211,6 +234,8 @@ export function extractKinematics(landmarks: PoseLandmark[]): TraineeKinematics 
       estimatedDepthCm: 5.4,
       recoilIncompletePct: 3.5,
       postureAngleDeviationDeg: 8.2,
+      anatomicalScaleFallback: false,
+      anatomicalScaleType: 'default',
     };
   }
 
@@ -282,10 +307,16 @@ export function extractKinematics(landmarks: PoseLandmark[]): TraineeKinematics 
   const anatomicalScale = computeAnatomicalScaleReference(landmarks);
 
   let estimatedDepthCm: number;
-  if (anatomicalScale.scaleDistance > 0.005) {
+  let anatomicalScaleFallback = false;
+  let anatomicalScaleWarning: string | undefined;
+
+  if (anatomicalScale.scaleDistance > 0.005 && !anatomicalScale.isFallback) {
     estimatedDepthCm = +(rawExcursion * anatomicalScale.cmPerUnit).toFixed(2);
   } else {
     // Fallback if no body reference landmarks present
+    anatomicalScaleFallback = true;
+    anatomicalScaleWarning =
+      'Shoulder and torso landmarks were occluded, off-axis, or cropped. Depth normalization fell back to an uncalibrated fixed scale; depth score may reflect camera-distance variance.';
     const normAvgPeak = peaks.length > 0 ? peaks.reduce((acc, idx) => acc + normalizedSeries[idx], 0) / peaks.length : 0.9;
     const normAvgTrough = troughs.length > 0 ? troughs.reduce((acc, idx) => acc + normalizedSeries[idx], 0) / troughs.length : 0.1;
     const normExcursion = Math.max(0.1, normAvgPeak - normAvgTrough);
@@ -325,6 +356,9 @@ export function extractKinematics(landmarks: PoseLandmark[]): TraineeKinematics 
     estimatedDepthCm: estimatedDepthCm >= 1.0 && estimatedDepthCm <= 12.0 ? estimatedDepthCm : 5.4,
     recoilIncompletePct: Math.min(100, recoilIncompletePct),
     postureAngleDeviationDeg,
+    anatomicalScaleFallback,
+    anatomicalScaleWarning,
+    anatomicalScaleType: anatomicalScale.referenceType,
   };
 }
 
@@ -346,6 +380,8 @@ export function calculateRealDTW(
       releaseVariancePct: 3.5,
       postureVarianceScore: 9.8,
       rawDtwDistance: 0.142,
+      anatomicalScaleFallback: true,
+      anatomicalScaleWarning: 'No landmark sequence provided; default mock metrics used.',
     };
   }
 
@@ -372,5 +408,7 @@ export function calculateRealDTW(
     releaseVariancePct,
     postureVarianceScore,
     rawDtwDistance,
+    anatomicalScaleFallback: kinematics.anatomicalScaleFallback,
+    anatomicalScaleWarning: kinematics.anatomicalScaleWarning,
   };
 }

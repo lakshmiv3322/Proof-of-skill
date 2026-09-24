@@ -4,7 +4,7 @@
 // BlazePose Overlay, Timestamped Annotations, and Dynamic Rubric Data
 // ─────────────────────────────────────────────────────────────
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -29,11 +29,13 @@ import {
   Loader2,
   CheckCircle2,
   XCircle,
+  AlertTriangle,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { ScoreReveal3D } from '@/components/3d/score-reveal-3d';
 import type { PoseLandmark } from '@/types/database';
 import { DEFAULT_CPR_RUBRIC_CONFIG, DEFAULT_WELDING_RUBRIC_CONFIG } from '@/lib/scoring/rubric-engine';
+import { computeAnatomicalScaleReference } from '@/lib/scoring/dtw';
 
 export interface DynamicCriterionScore {
   id: string;
@@ -112,6 +114,20 @@ export function EvaluationPage({ submissionId = 'sub-0000-0001', onBack }: Evalu
   const [savedOverrides, setSavedOverrides] = useState<Record<string, number>>({});
   const [showOverride, setShowOverride] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+
+  // Compute anatomical scale validity for visible warning on occlusion/cropping fallback
+  const scaleInfo = useMemo(() => {
+    if (landmarks && landmarks.length > 0) {
+      return computeAnatomicalScaleReference(landmarks);
+    }
+    // In demo or fallback CPR mode with no landmark frames
+    return {
+      cmPerUnit: 195,
+      referenceType: 'default' as const,
+      scaleDistance: 0,
+      isFallback: false,
+    };
+  }, [landmarks]);
 
   // ── Load submission data dynamically ─────────────────────────
   const loadSubmissionData = useCallback(async () => {
@@ -443,7 +459,13 @@ export function EvaluationPage({ submissionId = 'sub-0000-0001', onBack }: Evalu
             {profile.tradeName} · <strong className="text-foreground">{profile.fullName}</strong>
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center flex-wrap gap-2">
+          {scaleInfo.isFallback && (
+            <Badge variant="outline" className="bg-amber-500/10 text-amber-600 border-amber-500/30 gap-1 font-mono text-xs">
+              <AlertTriangle className="h-3 w-3" />
+              Uncalibrated Depth Scale
+            </Badge>
+          )}
           <Badge className="bg-blue-500/10 text-blue-600 border-blue-500/20">
             AI Scored · Ready for Assessor Review
           </Badge>
@@ -563,16 +585,39 @@ export function EvaluationPage({ submissionId = 'sub-0000-0001', onBack }: Evalu
                 {criteria.length} Criteria
               </Badge>
             </CardHeader>
-            <CardContent>
+            <CardContent className="space-y-3">
+              {scaleInfo.isFallback && (
+                <div className="rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-900 dark:text-amber-200 space-y-1">
+                  <div className="flex items-center gap-1.5 font-semibold text-amber-800 dark:text-amber-300">
+                    <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-600 dark:text-amber-400" />
+                    Kinematic Scale Alert: Uncalibrated Fallback
+                  </div>
+                  <p className="text-[11px] leading-relaxed text-muted-foreground dark:text-amber-200/90">
+                    {scaleInfo.fallbackReason || 'Shoulder/torso landmarks were occluded or cropped. Depth normalization fell back to an uncalibrated fixed scale.'}
+                  </p>
+                  <p className="text-[10px] font-medium text-amber-700 dark:text-amber-300">
+                    Assessor recommendation: Perform video scrub to confirm physical sternal/plunge depth.
+                  </p>
+                </div>
+              )}
+
               <ScrollArea className="max-h-[380px]">
                 <div className="space-y-4 pr-2">
                   {criteria.map((c) => {
                     const overridden = savedOverrides[c.id];
                     const display = overridden ?? c.aiScore;
+                    const isDepthCriterion = c.id === 'cpr-depth' || c.id.toLowerCase().includes('depth');
                     return (
                       <div key={c.id} className="space-y-1.5">
                         <div className="flex items-center justify-between">
-                          <span className="text-sm font-medium">{c.label}</span>
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-sm font-medium">{c.label}</span>
+                            {scaleInfo.isFallback && isDepthCriterion && (
+                              <Badge variant="outline" className="bg-amber-500/10 text-amber-600 border-amber-500/30 text-[9px] px-1 py-0 h-4">
+                                Fallback Scale
+                              </Badge>
+                            )}
+                          </div>
                           <div className="flex items-center gap-2">
                             {overridden !== undefined && (
                               <span className="text-xs text-muted-foreground line-through">

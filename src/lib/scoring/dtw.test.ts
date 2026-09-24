@@ -102,4 +102,50 @@ describe('DTW Kinematics Extraction', () => {
     const driftDelta = Math.abs(nearResult.estimatedDepthCm - farResult.estimatedDepthCm);
     expect(driftDelta).toBeLessThan(0.1);
   });
+
+  it('detects and flags occluded or partial shoulder visibility with visible fallback warning', () => {
+    const frameCount = 32;
+
+    // Sequence with occluded shoulders (visibility < 0.25, e.g. tight camera crop on hands only)
+    const occludedSequence: PoseLandmark[] = Array.from({ length: frameCount }, (_, i) => ({
+      frame: i,
+      timestamp_ms: i * 33.3,
+      points: [
+        { name: 'left_shoulder', x: 0.35, y: 0.25, z: 0, visibility: 0.10 }, // Below 0.25 threshold
+        { name: 'right_shoulder', x: 0.65, y: 0.25, z: 0, visibility: 0.15 }, // Below 0.25 threshold
+        { name: 'left_wrist', x: 0.50, y: 0.55 + ((Math.sin(i / 4) + 1) / 2) * 0.05, z: 0, visibility: 0.95 },
+        { name: 'right_wrist', x: 0.50, y: 0.55 + ((Math.sin(i / 4) + 1) / 2) * 0.05, z: 0, visibility: 0.95 },
+      ],
+    }));
+
+    const kinematics = extractKinematics(occludedSequence);
+    expect(kinematics.anatomicalScaleFallback).toBe(true);
+    expect(kinematics.anatomicalScaleWarning).toBeDefined();
+    expect(kinematics.anatomicalScaleWarning).toContain('Shoulder and torso landmarks were occluded');
+
+    const dtwResult = calculateRealDTW('sub-occluded-test', occludedSequence);
+    expect(dtwResult.anatomicalScaleFallback).toBe(true);
+    expect(dtwResult.anatomicalScaleWarning).toBeDefined();
+  });
+
+  it('uses torso length fallback when shoulders are occluded but hips and shoulders form a trunk', () => {
+    const frameCount = 32;
+
+    // Sequence where shoulders and hips are clearly visible, but shoulders alone aren't wide
+    const torsoSequence: PoseLandmark[] = Array.from({ length: frameCount }, (_, i) => ({
+      frame: i,
+      timestamp_ms: i * 33.3,
+      points: [
+        { name: 'left_shoulder', x: 0.45, y: 0.20, z: 0, visibility: 0.95 },
+        { name: 'right_shoulder', x: 0.55, y: 0.20, z: 0, visibility: 0.95 },
+        { name: 'left_hip', x: 0.45, y: 0.60, z: 0, visibility: 0.95 },
+        { name: 'right_hip', x: 0.55, y: 0.60, z: 0, visibility: 0.95 },
+        { name: 'left_wrist', x: 0.50, y: 0.55 + ((Math.sin(i / 4) + 1) / 2) * 0.05, z: 0, visibility: 0.95 },
+        { name: 'right_wrist', x: 0.50, y: 0.55 + ((Math.sin(i / 4) + 1) / 2) * 0.05, z: 0, visibility: 0.95 },
+      ],
+    }));
+
+    const kinematics = extractKinematics(torsoSequence);
+    expect(kinematics.anatomicalScaleFallback).toBe(false);
+  });
 });

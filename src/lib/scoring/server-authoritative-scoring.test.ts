@@ -96,4 +96,26 @@ describe('Server-Authoritative Scoring & RLS Lockdown Verification', () => {
     expect(result1.metrics.actualBpm).toEqual(result2.metrics.actualBpm);
     expect(result1.metrics.actualDepthCm).toEqual(result2.metrics.actualDepthCm);
   });
+
+  it('Migration 20260901000006 defines staging retention purge preserving pending/failed rows', () => {
+    const migrationPath = path.resolve(process.cwd(), 'supabase/migrations/20260901000006_submission_staging_retention_policy.sql');
+    const sql = fs.readFileSync(migrationPath, 'utf8');
+
+    expect(sql).toContain('purge_completed_submission_staging');
+    expect(sql).toContain("WHERE status = 'completed'");
+    expect(sql).not.toContain("WHERE status = 'pending'");
+    expect(sql).not.toContain("WHERE status = 'failed'");
+    expect(sql).toContain('archive_or_delete_staging_row');
+  });
+
+  it('Score-submission edge function purges staging row on successful score commit', () => {
+    const edgeFunctionPath = path.resolve(process.cwd(), 'supabase/functions/score-submission/index.ts');
+    const edgeFunctionCode = fs.readFileSync(edgeFunctionPath, 'utf8');
+
+    expect(edgeFunctionCode).toContain('.from("submission_staging")');
+    expect(edgeFunctionCode).toContain('.delete()');
+    expect(edgeFunctionCode).toContain('.eq("id", stagingId)');
+    expect(edgeFunctionCode).toContain('anatomicalScaleFallback');
+    expect(edgeFunctionCode).toContain('anatomicalScaleWarning');
+  });
 });

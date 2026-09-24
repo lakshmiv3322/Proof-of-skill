@@ -30,6 +30,9 @@ export interface GeneralKinematicMetrics {
   jointAngles: Record<string, { meanDeg: number; stdDevDeg: number; validFrames: number }>;
   travelSpeeds: Record<string, { speedMmSec: number; speedCmSec: number; validFrames: number }>;
   pathDeviations: Record<string, { deviationCm: number; validFrames: number }>;
+  anatomicalScaleFallback?: boolean;
+  anatomicalScaleWarning?: string;
+  anatomicalScaleType?: 'shoulder_width' | 'torso_length' | 'default';
 }
 
 export interface RubricResult {
@@ -42,6 +45,8 @@ export interface RubricResult {
     actualDepthCm: number;
     recoilVariancePct: number;
     postureVarianceScore: number;
+    anatomicalScaleFallback?: boolean;
+    anatomicalScaleWarning?: string;
   };
   /** Detailed kinematics computed across general trades. */
   kinematics?: GeneralKinematicMetrics;
@@ -338,6 +343,9 @@ export function extractGeneralKinematics(
     jointAngles,
     travelSpeeds,
     pathDeviations,
+    anatomicalScaleFallback: dtwResult.anatomicalScaleFallback ?? scale.isFallback,
+    anatomicalScaleWarning: dtwResult.anatomicalScaleWarning ?? scale.fallbackReason,
+    anatomicalScaleType: scale.referenceType,
   };
 }
 
@@ -616,6 +624,8 @@ export function evaluateSubmissionWithLandmarks(
       actualDepthCm: kinematics.actualDepthCm,
       recoilVariancePct: kinematics.recoilVariancePct,
       postureVarianceScore: kinematics.postureVarianceScore,
+      anatomicalScaleFallback: kinematics.anatomicalScaleFallback,
+      anatomicalScaleWarning: kinematics.anatomicalScaleWarning,
     },
     kinematics,
     isOfflineScore: true,

@@ -96,6 +96,9 @@ interface GeneralKinematics {
   jointAngles: Record<string, { meanDeg: number; stdDevDeg: number; validFrames: number }>;
   travelSpeeds: Record<string, { speedMmSec: number; speedCmSec: number; validFrames: number }>;
   pathDeviations: Record<string, { deviationCm: number; validFrames: number }>;
+  anatomicalScaleFallback?: boolean;
+  anatomicalScaleWarning?: string;
+  anatomicalScaleType?: 'shoulder_width' | 'torso_length' | 'default';
 }
 
 function computeDTWMetrics(landmarks: PoseLandmark[]): GeneralKinematics {
@@ -108,6 +111,9 @@ function computeDTWMetrics(landmarks: PoseLandmark[]): GeneralKinematics {
       jointAngles: { right_arm: { meanDeg: 78.0, stdDevDeg: 2.0, validFrames: 0 } },
       travelSpeeds: { right_wrist: { speedMmSec: 3.5, speedCmSec: 0.35, validFrames: 0 } },
       pathDeviations: { right_wrist: { deviationCm: 0.85, validFrames: 0 } },
+      anatomicalScaleFallback: true,
+      anatomicalScaleWarning: 'No landmark sequence provided; default mock metrics used.',
+      anatomicalScaleType: 'default',
     };
   }
 
@@ -229,16 +235,24 @@ function computeDTWMetrics(landmarks: PoseLandmark[]): GeneralKinematics {
 
   let actualDepthCm: number;
   let cmPerFrameUnit: number = 195.0;
+  let anatomicalScaleFallback = false;
+  let anatomicalScaleWarning: string | undefined;
+  let anatomicalScaleType: 'shoulder_width' | 'torso_length' | 'default' = 'default';
 
   if (shoulderFrames > 0) {
     const avgShoulderDist = totalShoulderDist / shoulderFrames;
     cmPerFrameUnit = STANDARD_BIACROMIAL_WIDTH_CM / avgShoulderDist;
     actualDepthCm = +(rawExcursion * cmPerFrameUnit).toFixed(2);
+    anatomicalScaleType = 'shoulder_width';
   } else if (torsoFrames > 0) {
     const avgTorsoDist = totalTorsoDist / torsoFrames;
     cmPerFrameUnit = STANDARD_TORSO_LENGTH_CM / avgTorsoDist;
     actualDepthCm = +(rawExcursion * cmPerFrameUnit).toFixed(2);
+    anatomicalScaleType = 'torso_length';
   } else {
+    anatomicalScaleFallback = true;
+    anatomicalScaleWarning =
+      'Shoulder and torso landmarks were occluded, off-axis, or cropped. Depth normalization fell back to an uncalibrated fixed scale; depth score may reflect camera-distance variance.';
     const avgPeak =
       peaks.length > 0
         ? peaks.reduce((acc, idx) => acc + normalizedSeries[idx], 0) / peaks.length
@@ -387,6 +401,9 @@ function computeDTWMetrics(landmarks: PoseLandmark[]): GeneralKinematics {
     jointAngles,
     travelSpeeds,
     pathDeviations,
+    anatomicalScaleFallback,
+    anatomicalScaleWarning,
+    anatomicalScaleType,
   };
 }
 
@@ -709,10 +726,16 @@ serve(async (req) => {
     }
 
     if (stagingId) {
-      await supabase
+      // 5. STAGING RETENTION CLEANUP: Purge raw telemetry staging row upon successful authoritative persistence
+      // Final video URL and landmark sets are now safely stored in submissions and pose_landmark_sets
+      const { error: cleanupErr } = await supabase
         .from("submission_staging")
-        .update({ status: "completed" })
+        .delete()
         .eq("id", stagingId);
+
+      if (cleanupErr) {
+        console.warn("[score-submission] staging cleanup notice (row may have already been purged):", cleanupErr.message);
+      }
     }
 
     return new Response(
@@ -726,6 +749,8 @@ serve(async (req) => {
           actualDepthCm: metrics.actualDepthCm,
           recoilVariancePct: metrics.recoilVariancePct,
           postureVarianceScore: metrics.postureVarianceScore,
+          anatomicalScaleFallback: metrics.anatomicalScaleFallback,
+          anatomicalScaleWarning: metrics.anatomicalScaleWarning,
         },
         kinematics: metrics,
         status: "ai_processed",

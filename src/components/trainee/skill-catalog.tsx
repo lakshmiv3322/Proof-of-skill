@@ -53,11 +53,11 @@ const SKILL_CARDS: SkillCard[] = [
     icon: Zap,
     color: 'text-orange-500',
     bgColor: 'bg-orange-500/10',
-    active: false,
+    active: true,
     duration: '20 min assessment',
     difficulty: 'Advanced',
     description:
-      'Stick welding fundamentals including arc control, bead placement, and PPE compliance.',
+      'Stick welding fundamentals including 70°–85° lead angle, 2.5–4.5 mm/s travel speed, and standoff stability.',
   },
   {
     id: 'carpentry',
@@ -146,7 +146,7 @@ const DIFFICULTY_COLOR: Record<string, string> = {
 };
 
 interface SkillCatalogProps {
-  onStartAssessment: () => void;
+  onStartAssessment: (skillId: string) => void;
 }
 
 export function SkillCatalog({ onStartAssessment }: SkillCatalogProps) {
@@ -168,8 +168,7 @@ export function SkillCatalog({ onStartAssessment }: SkillCatalogProps) {
             Ready to assess
           </p>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            CPR / First-Aid Chest Compression is currently active for your cohort. Additional
-            trades will be unlocked by your instructor.
+            CPR / First-Aid and SMAW Shielded Metal Arc Welding assessments are currently active for your cohort.
           </p>
         </div>
       </div>
@@ -230,7 +229,7 @@ export function SkillCatalog({ onStartAssessment }: SkillCatalogProps) {
                   className="w-full"
                   size="sm"
                   disabled={!skill.active}
-                  onClick={skill.active ? onStartAssessment : undefined}
+                  onClick={skill.active ? () => onStartAssessment(skill.id) : undefined}
                   variant={skill.active ? 'default' : 'outline'}
                 >
                   {skill.active ? (

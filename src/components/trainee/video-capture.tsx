@@ -5,7 +5,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
 import { PoseCanvas, type LivePoint } from './pose-canvas';
 import { poseDetector } from '@/lib/pose/pose-detector';
-import { evaluateSubmissionServer } from '@/lib/scoring/rubric-engine';
+import { evaluateSubmissionServer, DEFAULT_CPR_RUBRIC_CONFIG, DEFAULT_WELDING_RUBRIC_CONFIG } from '@/lib/scoring/rubric-engine';
 import { generateFullFeedback } from '@/lib/llm/feedback-generator';
 import { useApp } from '@/context/app-context';
 import { supabase, isSupabaseConfigured } from '@/lib/supabase/client';
@@ -32,6 +32,7 @@ import type { FullFeedback } from '@/lib/llm/feedback-generator';
 import type { PoseLandmark, PoseLandmarkSet } from '@/types/database';
 
 interface VideoCaptureProps {
+  skillId?: string;
   onBack: () => void;
   onComplete: () => void;
 }
@@ -83,8 +84,9 @@ interface ScoringResults {
   submissionId: string;
 }
 
-export function VideoCapture({ onBack, onComplete }: VideoCaptureProps) {
+export function VideoCapture({ skillId = 'cpr', onBack, onComplete }: VideoCaptureProps) {
   const { activeUser } = useApp();
+  const isWelding = skillId.includes('weld');
 
   const [state, setState] = useState<CaptureState>('preflight');
   const [mode,  setMode]  = useState<CaptureMode>('record');
@@ -351,25 +353,30 @@ export function VideoCapture({ onBack, onComplete }: VideoCaptureProps) {
       console.warn('[executeScoringEngine] Video upload non-fatal fallback:', uploadErr);
     }
 
-    // 3. Fetch rubric scoped to active user's institute_id
+    // 3. Fetch rubric scoped to active user's institute_id & trade
     setProcessingMsg('Fetching published trade rubric configuration…');
     setProcessingProgress(78);
 
-    const { data: rubricsData, error: rubricError } = await supabase
-      .from('rubrics')
-      .select('*')
-      .eq('institute_id', activeUser.institute_id)
-      .eq('is_published', true)
-      .limit(1);
+    let rubricConfig = isWelding ? DEFAULT_WELDING_RUBRIC_CONFIG : DEFAULT_CPR_RUBRIC_CONFIG;
+    let rubricId = isWelding ? '00000000-0000-0000-0000-000000000021' : '00000000-0000-0000-0000-000000000020';
+    let tradeId = isWelding ? '00000000-0000-0000-0000-000000000011' : '00000000-0000-0000-0000-000000000010';
 
-    const rubricRow = rubricsData?.[0];
-    const rubricConfig = rubricRow?.config;
+    if (isSupabaseConfigured) {
+      const { data: rubricsData } = await supabase
+        .from('rubrics')
+        .select('*')
+        .eq('institute_id', activeUser.institute_id)
+        .eq('is_published', true);
 
-    if (rubricError || !rubricConfig || !rubricRow) {
-      const msg = `Failed to load rubric configuration: ${rubricError?.message || 'No published rubric found for institute'}`;
-      setPipelineError(msg);
-      setProcessingMsg(msg);
-      return;
+      const matchedRubric = rubricsData?.find((r) =>
+        isWelding ? r.name?.toLowerCase().includes('weld') : !r.name?.toLowerCase().includes('weld')
+      ) || rubricsData?.[0];
+
+      if (matchedRubric?.config) {
+        rubricConfig = matchedRubric.config;
+        rubricId = matchedRubric.id;
+        tradeId = matchedRubric.trade_id;
+      }
     }
 
     setProcessingMsg('Executing server-side deterministic DTW scoring engine…');
@@ -385,8 +392,8 @@ export function VideoCapture({ onBack, onComplete }: VideoCaptureProps) {
           .insert({
             institute_id: activeUser.institute_id,
             trainee_id: activeUser.id,
-            trade_id: rubricRow.trade_id,
-            rubric_id: rubricRow.id,
+            trade_id: tradeId,
+            rubric_id: rubricId,
             video_url: realVideoStoragePath,
             duration_seconds: Math.max(1, recordingTime || 10),
             raw_landmarks: landmarksSeq,
@@ -411,8 +418,8 @@ export function VideoCapture({ onBack, onComplete }: VideoCaptureProps) {
       landmarksSeq,
       {
         stagingId,
-        tradeId: rubricRow.trade_id,
-        rubricId: rubricRow.id,
+        tradeId,
+        rubricId,
         videoUrl: realVideoStoragePath,
         durationSeconds: Math.max(1, recordingTime || 10),
         traineeId: activeUser.id,
@@ -452,8 +459,8 @@ export function VideoCapture({ onBack, onComplete }: VideoCaptureProps) {
           submittedAt: new Date().toISOString(),
           traineeId: activeUser.id,
           instituteId: activeUser.institute_id,
-          tradeId: rubricRow.trade_id,
-          rubricId: rubricRow.id,
+          tradeId: tradeId,
+          rubricId: rubricId,
           overallScore: evalResult.overallScore,
           criteriaScores: evalResult.deltas.reduce<Record<string, number>>((acc, d) => {
             acc[d.criterionId] = d.score;

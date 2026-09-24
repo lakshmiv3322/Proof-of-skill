@@ -33,6 +33,7 @@ import {
 import { cn } from '@/lib/utils';
 import { ScoreReveal3D } from '@/components/3d/score-reveal-3d';
 import type { PoseLandmark } from '@/types/database';
+import { DEFAULT_CPR_RUBRIC_CONFIG, DEFAULT_WELDING_RUBRIC_CONFIG } from '@/lib/scoring/rubric-engine';
 
 export interface DynamicCriterionScore {
   id: string;
@@ -57,83 +58,23 @@ interface TraineeProfile {
   durationSeconds: number;
 }
 
-// Fallback CPR criteria when viewing a CPR submission without preloaded criteria in DB
-const DEFAULT_CPR_CRITERIA: DynamicCriterionScore[] = [
-  {
-    id: 'compression-depth',
-    label: 'Compression Depth (50–60mm)',
-    weight: 25,
-    aiScore: 92,
-    aiNotes: 'Consistent depth throughout 30-cycle. Adequate sternal displacement observed.',
-  },
-  {
-    id: 'compression-rate',
-    label: 'Compression Rate (100–120 BPM)',
-    weight: 25,
-    aiScore: 88,
-    aiNotes: 'Average tempo 112 BPM. Metronome alignment remained stable across all sets.',
-  },
-  {
-    id: 'hand-placement',
-    label: 'Hand Placement & Interlock',
-    weight: 20,
-    aiScore: 95,
-    aiNotes: 'Heel of hand centered on lower half of sternum. Fingers properly interlocked.',
-  },
-  {
-    id: 'chest-recoil',
-    label: 'Full Chest Recoil & Posture',
-    weight: 15,
-    aiScore: 84,
-    aiNotes: 'Complete recoil achieved on 94% of reps. Slight leaning on final 5 compressions.',
-  },
-  {
-    id: 'rhythm-consistency',
-    label: 'Rhythm & Duty Cycle',
-    weight: 15,
-    aiScore: 90,
-    aiNotes: 'Smooth sinusoidal compression duty cycle (approx 50:50 compression/release).',
-  },
-];
+// Dynamic CPR criteria generated from the rule engine configuration
+const DEFAULT_CPR_CRITERIA: DynamicCriterionScore[] = DEFAULT_CPR_RUBRIC_CONFIG.criteria.map((c) => ({
+  id: c.id,
+  label: c.label,
+  weight: c.weight,
+  aiScore: c.id === 'cpr-depth' ? 92 : c.id === 'cpr-rate' ? 88 : c.id === 'cpr-recoil' ? 86 : 95,
+  aiNotes: c.description,
+}));
 
-// Fallback welding criteria for welding submissions
-const DEFAULT_WELDING_CRITERIA: DynamicCriterionScore[] = [
-  {
-    id: 'arc-length',
-    label: 'Arc Length Control',
-    weight: 25,
-    aiScore: 85,
-    aiNotes: 'Consistent arc length. Minor deviation at start of pass (~0:12).',
-  },
-  {
-    id: 'travel-speed',
-    label: 'Travel Speed',
-    weight: 25,
-    aiScore: 78,
-    aiNotes: 'Slightly fast in the final third. Bead narrows after 1:35.',
-  },
-  {
-    id: 'bead-placement',
-    label: 'Bead Placement',
-    weight: 20,
-    aiScore: 90,
-    aiNotes: 'Excellent bead placement, well-centered on joint. Good toe fusion.',
-  },
-  {
-    id: 'slag-removal',
-    label: 'Slag Removal & Cleanup',
-    weight: 15,
-    aiScore: 72,
-    aiNotes: 'Residual slag visible at stop point. Could not verify full cleanup.',
-  },
-  {
-    id: 'safety',
-    label: 'Safety & PPE Compliance',
-    weight: 15,
-    aiScore: 100,
-    aiNotes: 'Full PPE compliance throughout. Helmet down during entire weld.',
-  },
-];
+// Dynamic Welding criteria generated from the rule engine configuration
+const DEFAULT_WELDING_CRITERIA: DynamicCriterionScore[] = DEFAULT_WELDING_RUBRIC_CONFIG.criteria.map((c) => ({
+  id: c.id,
+  label: c.label,
+  weight: c.weight,
+  aiScore: c.id === 'weld-torch-angle' ? 90 : c.id === 'weld-travel-speed' ? 84 : c.id === 'weld-arc-stability' ? 88 : 95,
+  aiNotes: c.description,
+}));
 
 function scoreColor(score: number) {
   if (score >= 85) return 'text-emerald-500';

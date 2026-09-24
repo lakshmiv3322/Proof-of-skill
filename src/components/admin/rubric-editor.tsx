@@ -1,8 +1,10 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
 import {
   Select,
   SelectContent,
@@ -13,7 +15,8 @@ import {
 import { Separator } from '@/components/ui/separator';
 import { useApp } from '@/context/app-context';
 import { logAudit } from '@/lib/supabase/audit';
-import type { Rubric, RubricCriterion } from '@/types/database';
+import { DEFAULT_CPR_RUBRIC_CONFIG, DEFAULT_WELDING_RUBRIC_CONFIG } from '@/lib/scoring/rubric-engine';
+import type { Rubric, RubricCriterion, KinematicRuleType } from '@/types/database';
 import {
   AlertCircle,
   CheckCircle2,
@@ -21,78 +24,131 @@ import {
   Layers,
   RefreshCw,
   Save,
+  Plus,
+  Trash2,
+  Sliders,
+  Settings2,
+  Activity,
+  Zap,
+  Heart,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 // ─────────────────────────────────────────────────────────────
-// RubricEditor — live JSON config editor for active trade rubrics
+// RubricEditor — Visual Rule Builder + Live JSON Config Editor
 // ─────────────────────────────────────────────────────────────
 
 function prettyJson(obj: unknown): string {
   return JSON.stringify(obj, null, 2);
 }
 
-const DEFAULT_DEMO_RUBRIC: Rubric = {
-  id: '00000000-0000-0000-0000-000000000020',
-  institute_id: '00000000-0000-0000-0000-000000000001',
-  trade_id: '00000000-0000-0000-0000-000000000010',
-  name: 'AHA-CPR-2026-v2',
-  version: 1,
-  is_published: true,
-  pass_threshold: 70,
-  config: {
-    criteria: [
-      {
-        id: 'rate',
-        label: 'Compression Rate',
-        weight: 30,
-        description: 'Maintain cadence between 100 and 120 compressions per minute.',
-        indicators: ['100.0 - 120.0 BPM target window'],
-      },
-      {
-        id: 'depth',
-        label: 'Compression Depth',
-        weight: 30,
-        description: 'Maintain sternal excursion depth between 5.0cm and 6.0cm.',
-        indicators: ['5.0 - 6.0 cm target depth'],
-      },
-      {
-        id: 'recoil',
-        label: 'Full Recoil Completeness',
-        weight: 20,
-        description: 'Allow complete thoracic recoil without residual leaning.',
-        indicators: ['< 5.0% incomplete recoil'],
-      },
-      {
-        id: 'posture',
-        label: 'Arm Posture & Vertical Lock',
-        weight: 20,
-        description: 'Elbows locked straight and shoulders positioned vertically over sternum.',
-        indicators: ['< 15.0° angular deviation'],
-      },
-    ],
-    scoring_scale: {
-      min: 0,
-      max: 100,
-      bands: [
-        { label: 'Pass', min: 70, max: 100, color: '#00f0ff' },
-        { label: 'Needs Practice', min: 0, max: 69, color: '#f59e0b' },
-      ],
-    },
-    total_weight: 100,
+const RULE_TYPE_INFO: Record<
+  KinematicRuleType,
+  { label: string; unit: string; description: string; defaultMin: number; defaultMax: number; defaultTol: number }
+> = {
+  frequency_bpm: {
+    label: 'Cadence / BPM (Frequency)',
+    unit: 'BPM',
+    description: 'Calculates cyclic rep frequency over time (e.g. CPR compression rate).',
+    defaultMin: 100,
+    defaultMax: 120,
+    defaultTol: 10,
   },
-  created_at: new Date().toISOString(),
-  updated_at: new Date().toISOString(),
+  depth_normalized: {
+    label: 'Anatomically Normalized Depth',
+    unit: 'cm',
+    description: 'Calculates sternal/tool excursion normalized by user torso/shoulder dimensions.',
+    defaultMin: 5.0,
+    defaultMax: 6.0,
+    defaultTol: 0.8,
+  },
+  recoil_completeness: {
+    label: 'Recoil / Release Completeness',
+    unit: '% remaining',
+    description: 'Verifies full release back to resting position without leaning.',
+    defaultMin: 0,
+    defaultMax: 5.0,
+    defaultTol: 5.0,
+  },
+  joint_angle_range: {
+    label: '3-Point Joint Angle Range',
+    unit: 'deg (°)',
+    description: 'Measures angle between 3 landmarks (e.g. shoulder-elbow-wrist torch angle or locked arms).',
+    defaultMin: 70,
+    defaultMax: 85,
+    defaultTol: 10,
+  },
+  travel_speed: {
+    label: 'Progression / Travel Speed',
+    unit: 'mm/s',
+    description: 'Tracks linear motion velocity of active landmark in physical units.',
+    defaultMin: 2.5,
+    defaultMax: 4.5,
+    defaultTol: 1.0,
+  },
+  path_stability: {
+    label: 'Path / Standoff Stability',
+    unit: 'cm wander',
+    description: 'Monitors orthogonal deviation and lateral stability along progression line.',
+    defaultMin: 0,
+    defaultMax: 1.2,
+    defaultTol: 0.5,
+  },
+  posture_variance: {
+    label: 'DTW Posture Variance',
+    unit: 'score',
+    description: 'Compares full-body posture kinematics against certified baseline via DTW.',
+    defaultMin: 0,
+    defaultMax: 15,
+    defaultTol: 10,
+  },
+  custom: {
+    label: 'Custom / Dynamic Kinematic Metric',
+    unit: 'units',
+    description: 'User-configured dynamic metric threshold for specialized trade assessments.',
+    defaultMin: 0,
+    defaultMax: 100,
+    defaultTol: 10,
+  },
 };
+
+const DEFAULT_DEMO_RUBRICS: Rubric[] = [
+  {
+    id: '00000000-0000-0000-0000-000000000020',
+    institute_id: '00000000-0000-0000-0000-000000000001',
+    trade_id: '00000000-0000-0000-0000-000000000010',
+    name: 'CPR AHA/ERC 2026 Standard (Rule-Based)',
+    version: 2,
+    is_published: true,
+    pass_threshold: 70,
+    config: DEFAULT_CPR_RUBRIC_CONFIG,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  },
+  {
+    id: '00000000-0000-0000-0000-000000000021',
+    institute_id: '00000000-0000-0000-0000-000000000001',
+    trade_id: '00000000-0000-0000-0000-000000000011',
+    name: 'AWS D1.1 SMAW Welding Kinematic Standard',
+    version: 1,
+    is_published: true,
+    pass_threshold: 75,
+    config: DEFAULT_WELDING_RUBRIC_CONFIG,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  },
+];
 
 export function RubricEditor() {
   const { db, activeUser } = useApp();
-  const [rubrics, setRubrics] = useState<Rubric[]>([DEFAULT_DEMO_RUBRIC]);
+  const [rubrics, setRubrics] = useState<Rubric[]>(DEFAULT_DEMO_RUBRICS);
   const [tradeMap, setTradeMap] = useState<Record<string, string>>({
     '00000000-0000-0000-0000-000000000010': 'CPR Chest Compression Assessment',
+    '00000000-0000-0000-0000-000000000011': 'SMAW Shielded Metal Arc Welding',
   });
-  const [selectedRubricId, setSelectedRubricId] = useState<string>(DEFAULT_DEMO_RUBRIC.id);
-  const [jsonText, setJsonText] = useState<string>(prettyJson(DEFAULT_DEMO_RUBRIC.config));
+  const [selectedRubricId, setSelectedRubricId] = useState<string>(DEFAULT_DEMO_RUBRICS[0].id);
+  const [editorMode, setEditorMode] = useState<'visual' | 'json'>('visual');
+  const [jsonText, setJsonText] = useState<string>(prettyJson(DEFAULT_DEMO_RUBRICS[0].config));
   const [parseError, setParseError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
@@ -107,12 +163,13 @@ export function RubricEditor() {
         if (!error && data && data.length > 0) {
           const rList = data as Rubric[];
           setRubrics(rList);
-          setSelectedRubricId((prev) => prev || rList[0].id);
-          setJsonText((prev) => prev || prettyJson(rList[0].config));
+          setSelectedRubricId((prev) => (rList.some((r) => r.id === prev) ? prev : rList[0].id));
+          const current = rList.find((r) => r.id === selectedRubricId) || rList[0];
+          setJsonText(prettyJson(current.config));
         } else {
-          setRubrics([DEFAULT_DEMO_RUBRIC]);
-          setSelectedRubricId(DEFAULT_DEMO_RUBRIC.id);
-          setJsonText(prettyJson(DEFAULT_DEMO_RUBRIC.config));
+          setRubrics(DEFAULT_DEMO_RUBRICS);
+          setSelectedRubricId(DEFAULT_DEMO_RUBRICS[0].id);
+          setJsonText(prettyJson(DEFAULT_DEMO_RUBRICS[0].config));
         }
       });
 
@@ -124,14 +181,14 @@ export function RubricEditor() {
           const tMap = Object.fromEntries(
             (data as { id: string; name: string }[]).map((t) => [t.id, t.name])
           );
-          setTradeMap(tMap);
+          setTradeMap((prev) => ({ ...prev, ...tMap }));
         }
       });
-  }, [db, activeUser?.institute_id]);
+  }, [db, activeUser?.institute_id, selectedRubricId]);
 
-  const selectedRubric = rubrics.find((r) => r.id === selectedRubricId);
+  const selectedRubric = rubrics.find((r) => r.id === selectedRubricId) || rubrics[0];
 
-  // Derived criteria from live JSON (for the preview cards)
+  // Derived criteria from live JSON
   const liveCriteria: RubricCriterion[] = (() => {
     try {
       const parsed = JSON.parse(jsonText) as { criteria?: RubricCriterion[] };
@@ -159,8 +216,52 @@ export function RubricEditor() {
       JSON.parse(val);
       setParseError(null);
     } catch (e) {
-      setParseError(e instanceof Error ? e.message : 'Invalid JSON');
+      setParseError(e instanceof Error ? e.message : 'Invalid JSON format');
     }
+  };
+
+  const updateVisualCriteria = (newCriteria: RubricCriterion[]) => {
+    try {
+      const parsed = JSON.parse(jsonText);
+      const updated = {
+        ...parsed,
+        criteria: newCriteria,
+        total_weight: newCriteria.reduce((sum, c) => sum + (c.weight || 0), 0),
+      };
+      setJsonText(prettyJson(updated));
+      setParseError(null);
+      setSaved(false);
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleUpdateCriterion = (idx: number, patch: Partial<RubricCriterion>) => {
+    const updated = [...liveCriteria];
+    updated[idx] = { ...updated[idx], ...patch };
+    updateVisualCriteria(updated);
+  };
+
+  const handleAddCriterion = () => {
+    const newRuleType: KinematicRuleType = 'joint_angle_range';
+    const info = RULE_TYPE_INFO[newRuleType];
+    const newCrit: RubricCriterion = {
+      id: `rule-${Date.now()}`,
+      label: 'New Kinematic Rule',
+      ruleType: newRuleType,
+      targetMin: info.defaultMin,
+      targetMax: info.defaultMax,
+      tolerance: info.defaultTol,
+      weight: 15,
+      description: 'Configure threshold and target landmark pairs for kinematic evaluation.',
+      indicators: [`Optimal range: ${info.defaultMin} - ${info.defaultMax} ${info.unit}`],
+    };
+    updateVisualCriteria([...liveCriteria, newCrit]);
+  };
+
+  const handleDeleteCriterion = (idx: number) => {
+    const updated = liveCriteria.filter((_, i) => i !== idx);
+    updateVisualCriteria(updated);
   };
 
   const handleSave = async () => {
@@ -170,8 +271,13 @@ export function RubricEditor() {
       const config = JSON.parse(jsonText) as Rubric['config'];
       const previousConfig = selectedRubric.config;
 
+      // Update via Supabase if active
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { error: updateError } = await (db as any).from('rubrics').update({ config }).eq('id', selectedRubricId);
+      const { error: updateError } = await (db as any)
+        .from('rubrics')
+        .update({ config, updated_at: new Date().toISOString() })
+        .eq('id', selectedRubricId);
+
       if (updateError) console.warn('[RubricEditor] DB update notice:', updateError.message);
 
       // Log immutable enterprise audit event
@@ -220,24 +326,49 @@ export function RubricEditor() {
     setSaved(false);
   };
 
+  const totalWeight = liveCriteria.reduce((a, c) => a + (Number(c.weight) || 0), 0);
+  const isWeightValid = totalWeight === 100;
+
   return (
-    <div className="p-4 sm:p-6 lg:p-8">
+    <div className="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto">
       {/* Header */}
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">Rubric Configuration</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Inspect and edit the JSON config that governs AI scoring for each active trade.
-        </p>
+      <div className="mb-6 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">Generalized Kinematics Rubric Engine</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Configure data-driven kinematic rule parameters (angles, velocities, depth, tolerances) for any trade.
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button
+            variant={editorMode === 'visual' ? 'default' : 'outline'}
+            size="sm"
+            onClick={() => setEditorMode('visual')}
+            className="gap-1.5"
+          >
+            <Sliders className="h-3.5 w-3.5" />
+            Visual Rule Builder
+          </Button>
+          <Button
+            variant={editorMode === 'json' ? 'default' : 'outline'}
+            size="sm"
+            onClick={() => setEditorMode('json')}
+            className="gap-1.5"
+          >
+            <Code2 className="h-3.5 w-3.5" />
+            Raw JSON
+          </Button>
+        </div>
       </div>
 
-      {/* Rubric selector */}
+      {/* Rubric selector header card */}
       <Card className="mb-6">
         <CardContent className="flex flex-wrap items-center gap-4 p-4">
-          <div className="flex-1 min-w-[200px]">
-            <Label className="mb-1.5 block text-xs">Active Rubric</Label>
+          <div className="flex-1 min-w-[240px]">
+            <Label className="mb-1.5 block text-xs font-semibold">Active Trade Rubric</Label>
             <Select value={selectedRubricId} onValueChange={handleRubricChange}>
               <SelectTrigger>
-                <SelectValue placeholder="Select a rubric…" />
+                <SelectValue placeholder="Select a trade rubric…" />
               </SelectTrigger>
               <SelectContent>
                 {rubrics.map((r) => (
@@ -250,7 +381,7 @@ export function RubricEditor() {
           </div>
 
           {selectedRubric && (
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap items-center gap-2 pt-4 sm:pt-0">
               <Badge variant="outline" className="text-xs">
                 v{selectedRubric.version}
               </Badge>
@@ -266,159 +397,345 @@ export function RubricEditor() {
                 {selectedRubric.is_published ? 'Published' : 'Draft'}
               </Badge>
               <span className="text-xs text-muted-foreground">
-                Trade: <span className="font-medium text-foreground">{tradeMap[selectedRubric.trade_id] ?? 'Unknown'}</span>
+                Trade: <span className="font-medium text-foreground">{tradeMap[selectedRubric.trade_id] ?? selectedRubric.trade_id}</span>
               </span>
               <span className="text-xs text-muted-foreground">
-                Pass threshold: <span className="font-medium text-foreground">{selectedRubric.pass_threshold}%</span>
+                Pass Threshold: <span className="font-semibold text-foreground">{selectedRubric.pass_threshold}%</span>
               </span>
             </div>
           )}
         </CardContent>
       </Card>
 
-      <div className="grid gap-6 lg:grid-cols-2">
-        {/* LEFT: JSON editor */}
-        <div className="space-y-3">
-          <div className="flex items-center justify-between">
-            <Label className="flex items-center gap-2 text-sm font-semibold">
-              <Code2 className="h-4 w-4 text-primary" />
-              JSON Config Editor
-            </Label>
-            <div className="flex items-center gap-1.5">
-              {parseError ? (
-                <span className="flex items-center gap-1 text-xs text-destructive">
-                  <AlertCircle className="h-3 w-3" /> Parse error
-                </span>
-              ) : (
-                <span className="flex items-center gap-1 text-xs text-emerald-500">
-                  <CheckCircle2 className="h-3 w-3" /> Valid JSON
-                </span>
-              )}
-            </div>
-          </div>
-
-          <div className="relative rounded-lg border border-border/60 bg-muted/30 overflow-hidden">
-            {/* Line numbers overlay */}
-            <div className="absolute left-0 top-0 bottom-0 w-10 bg-muted/50 border-r border-border/40 flex flex-col pt-3 pl-2 text-[10px] text-muted-foreground font-mono pointer-events-none select-none overflow-hidden">
-              {jsonText.split('\n').map((_, i) => (
-                <div key={i} className="leading-5">
-                  {i + 1}
-                </div>
-              ))}
-            </div>
-            <textarea
-              className="w-full pl-12 pr-3 py-3 bg-transparent font-mono text-xs leading-5 resize-none focus:outline-none min-h-[380px] text-foreground"
-              value={jsonText}
-              onChange={(e) => handleTextChange(e.target.value)}
-              spellCheck={false}
-            />
-          </div>
-
-          {parseError && (
-            <p className="text-xs text-destructive font-mono bg-destructive/5 border border-destructive/20 rounded-md px-3 py-2">
-              {parseError}
-            </p>
-          )}
-
-          {saveError && (
-            <div className="flex flex-col gap-2 p-3 bg-destructive/5 border border-destructive/20 rounded-md">
-              <p className="text-xs text-destructive font-mono">{saveError}</p>
-              <Button size="sm" variant="outline" onClick={handleSave} className="w-fit self-start h-7 text-xs">
-                Retry
+      {/* Main workspace */}
+      {editorMode === 'visual' ? (
+        <div className="grid gap-6 lg:grid-cols-3">
+          {/* Left 2 Cols: Visual Rule Cards */}
+          <div className="lg:col-span-2 space-y-4">
+            <div className="flex items-center justify-between">
+              <Label className="flex items-center gap-2 text-sm font-semibold">
+                <Settings2 className="h-4 w-4 text-primary" />
+                Kinematic Rule Criteria ({liveCriteria.length})
+              </Label>
+              <Button size="sm" variant="outline" onClick={handleAddCriterion} className="gap-1.5 h-8 text-xs">
+                <Plus className="h-3.5 w-3.5" />
+                Add Kinematic Rule
               </Button>
             </div>
-          )}
 
-          <div className="flex gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleReset}
-              className="gap-1.5"
-            >
-              <RefreshCw className="h-3.5 w-3.5" />
-              Reset
-            </Button>
-            <Button
-              size="sm"
-              disabled={!!parseError || !selectedRubric || saved}
-              onClick={handleSave}
-              className="gap-1.5 ml-auto"
-            >
-              <Save className="h-3.5 w-3.5" />
-              {saved ? 'Saved ✓' : 'Save Changes'}
-            </Button>
-          </div>
-        </div>
+            <div className="space-y-4">
+              {liveCriteria.map((criterion, idx) => {
+                const ruleType: KinematicRuleType = criterion.ruleType || 'joint_angle_range';
+                const info = RULE_TYPE_INFO[ruleType] || RULE_TYPE_INFO.joint_angle_range;
 
-        {/* RIGHT: Live criteria preview */}
-        <div className="space-y-3">
-          <Label className="flex items-center gap-2 text-sm font-semibold">
-            <Layers className="h-4 w-4 text-primary" />
-            Live Preview — Criteria ({liveCriteria.length})
-          </Label>
+                return (
+                  <Card key={criterion.id || idx} className="border-border/80 shadow-sm">
+                    <CardHeader className="pb-3 pt-4">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex-1 space-y-2">
+                          <div className="flex items-center gap-2">
+                            <Input
+                              value={criterion.label}
+                              onChange={(e) => handleUpdateCriterion(idx, { label: e.target.value })}
+                              placeholder="Rule Label (e.g. Lead Torch Angle)"
+                              className="font-semibold text-sm h-8"
+                            />
+                            <div className="flex items-center gap-1 shrink-0">
+                              <span className="text-xs text-muted-foreground font-mono">Weight:</span>
+                              <Input
+                                type="number"
+                                min={0}
+                                max={100}
+                                value={criterion.weight}
+                                onChange={(e) =>
+                                  handleUpdateCriterion(idx, { weight: Number(e.target.value) || 0 })
+                                }
+                                className="w-16 h-8 text-xs font-mono text-center"
+                              />
+                              <span className="text-xs text-muted-foreground">%</span>
+                            </div>
+                          </div>
+                        </div>
 
-          {liveCriteria.length === 0 && !parseError && (
-            <p className="text-sm text-muted-foreground">
-              No criteria found. Check that the JSON includes a `criteria` array.
-            </p>
-          )}
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          onClick={() => handleDeleteCriterion(idx)}
+                          className="h-8 w-8 text-muted-foreground hover:text-destructive shrink-0"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </CardHeader>
 
-          {parseError && (
-            <p className="text-sm text-muted-foreground">
-              Fix the JSON error on the left to see a live preview.
-            </p>
-          )}
+                    <CardContent className="space-y-3 pt-0 text-xs">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <Label className="text-[11px] text-muted-foreground mb-1 block">
+                            Kinematic Rule Interpreter
+                          </Label>
+                          <Select
+                            value={ruleType}
+                            onValueChange={(val: KinematicRuleType) => {
+                              const rInfo = RULE_TYPE_INFO[val];
+                              handleUpdateCriterion(idx, {
+                                ruleType: val,
+                                targetMin: rInfo.defaultMin,
+                                targetMax: rInfo.defaultMax,
+                                tolerance: rInfo.defaultTol,
+                                indicators: [`Optimal range: ${rInfo.defaultMin} - ${rInfo.defaultMax} ${rInfo.unit}`],
+                              });
+                            }}
+                          >
+                            <SelectTrigger className="h-8 text-xs">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {Object.entries(RULE_TYPE_INFO).map(([key, item]) => (
+                                <SelectItem key={key} value={key} className="text-xs">
+                                  {item.label}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
 
-          <div className="space-y-3">
-            {liveCriteria.map((criterion, idx) => (
-              <Card key={criterion.id ?? idx} className="border-border/60">
-                <CardHeader className="pb-2 pt-4">
-                  <div className="flex items-center justify-between gap-2">
-                    <CardTitle className="text-sm leading-snug">{criterion.label}</CardTitle>
-                    <Badge variant="outline" className="shrink-0 text-xs">
-                      Weight: {criterion.weight}%
-                    </Badge>
-                  </div>
-                  <p className="text-xs text-muted-foreground">{criterion.description}</p>
-                </CardHeader>
-                {criterion.indicators?.length > 0 && (
-                  <CardContent className="pt-0">
-                    <Separator className="mb-2" />
-                    <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                      Indicators
-                    </p>
-                    <ul className="space-y-1">
-                      {criterion.indicators.map((ind, i) => (
-                        <li key={i} className="flex items-start gap-1.5 text-xs text-muted-foreground">
-                          <span className="mt-0.5 text-primary">•</span>
-                          {ind}
-                        </li>
-                      ))}
-                    </ul>
-                  </CardContent>
-                )}
-              </Card>
-            ))}
-          </div>
+                        <div>
+                          <Label className="text-[11px] text-muted-foreground mb-1 block">
+                            Target Threshold Window ({info.unit})
+                          </Label>
+                          <div className="grid grid-cols-3 gap-1.5">
+                            <div>
+                              <Input
+                                type="number"
+                                step="any"
+                                value={criterion.targetMin ?? 0}
+                                onChange={(e) =>
+                                  handleUpdateCriterion(idx, { targetMin: Number(e.target.value) })
+                                }
+                                placeholder="Min"
+                                className="h-8 text-xs font-mono text-center"
+                              />
+                              <span className="text-[9px] text-muted-foreground block text-center mt-0.5">Min</span>
+                            </div>
+                            <div>
+                              <Input
+                                type="number"
+                                step="any"
+                                value={criterion.targetMax ?? 0}
+                                onChange={(e) =>
+                                  handleUpdateCriterion(idx, { targetMax: Number(e.target.value) })
+                                }
+                                placeholder="Max"
+                                className="h-8 text-xs font-mono text-center"
+                              />
+                              <span className="text-[9px] text-muted-foreground block text-center mt-0.5">Max</span>
+                            </div>
+                            <div>
+                              <Input
+                                type="number"
+                                step="any"
+                                value={criterion.tolerance ?? 0}
+                                onChange={(e) =>
+                                  handleUpdateCriterion(idx, { tolerance: Number(e.target.value) })
+                                }
+                                placeholder="±Tol"
+                                className="h-8 text-xs font-mono text-center"
+                              />
+                              <span className="text-[9px] text-muted-foreground block text-center mt-0.5">±Tol</span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
 
-          {/* Weight total */}
-          {liveCriteria.length > 0 && !parseError && (
-            <div className={cn(
-              'flex items-center justify-between rounded-lg px-4 py-3 text-sm',
-              liveCriteria.reduce((a, c) => a + c.weight, 0) === 100
-                ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-600'
-                : 'bg-amber-500/10 border border-amber-500/20 text-amber-600'
-            )}>
-              <span>Total criterion weight</span>
-              <span className="font-bold">
-                {liveCriteria.reduce((a, c) => a + c.weight, 0)}%
-                {liveCriteria.reduce((a, c) => a + c.weight, 0) === 100 ? ' ✓' : ' ✗ (must equal 100%)'}
-              </span>
+                      <div>
+                        <Label className="text-[11px] text-muted-foreground mb-1 block">
+                          Description & Assessor Guidelines
+                        </Label>
+                        <Textarea
+                          value={criterion.description}
+                          onChange={(e) => handleUpdateCriterion(idx, { description: e.target.value })}
+                          rows={2}
+                          className="text-xs resize-none"
+                          placeholder="Explain kinematic requirements and clinical/trade implications…"
+                        />
+                      </div>
+                    </CardContent>
+                  </Card>
+                );
+              })}
             </div>
-          )}
+          </div>
+
+          {/* Right Col: Summary, Weight Balance & Save */}
+          <div className="space-y-4">
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm">Rubric Validation</CardTitle>
+                <CardDescription className="text-xs">
+                  Automated checks before saving to production database.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <div
+                  className={cn(
+                    'flex items-center justify-between rounded-lg px-3 py-2.5 text-xs font-medium',
+                    isWeightValid
+                      ? 'bg-emerald-500/10 text-emerald-600 border border-emerald-500/20'
+                      : 'bg-amber-500/10 text-amber-600 border border-amber-500/20'
+                  )}
+                >
+                  <span>Total Criteria Weight</span>
+                  <span className="font-bold font-mono">
+                    {totalWeight}% {isWeightValid ? '✓' : '(Must be 100%)'}
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between text-xs text-muted-foreground py-1 border-b border-border/50">
+                  <span>Rule Engine Mode</span>
+                  <span className="font-mono text-foreground font-medium">Kinematics v2 (Data-Driven)</span>
+                </div>
+
+                <div className="flex items-center justify-between text-xs text-muted-foreground py-1 border-b border-border/50">
+                  <span>Active Criteria Count</span>
+                  <span className="font-mono text-foreground font-medium">{liveCriteria.length} rules</span>
+                </div>
+
+                <div className="pt-2 flex flex-col gap-2">
+                  <Button
+                    size="sm"
+                    disabled={!isWeightValid || saved}
+                    onClick={handleSave}
+                    className="w-full gap-1.5"
+                  >
+                    <Save className="h-3.5 w-3.5" />
+                    {saved ? 'Saved Successfully ✓' : 'Save Rubric to Database'}
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={handleReset} className="w-full gap-1.5 text-xs">
+                    <RefreshCw className="h-3.5 w-3.5" />
+                    Reset Changes
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
         </div>
-      </div>
+      ) : (
+        /* JSON Mode */
+        <div className="grid gap-6 lg:grid-cols-2">
+          {/* LEFT: JSON editor */}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <Label className="flex items-center gap-2 text-sm font-semibold">
+                <Code2 className="h-4 w-4 text-primary" />
+                JSON Config Editor
+              </Label>
+              <div className="flex items-center gap-1.5">
+                {parseError ? (
+                  <span className="flex items-center gap-1 text-xs text-destructive">
+                    <AlertCircle className="h-3 w-3" /> Parse error
+                  </span>
+                ) : (
+                  <span className="flex items-center gap-1 text-xs text-emerald-500">
+                    <CheckCircle2 className="h-3 w-3" /> Valid JSON
+                  </span>
+                )}
+              </div>
+            </div>
+
+            <div className="relative rounded-lg border border-border/60 bg-muted/30 overflow-hidden">
+              <div className="absolute left-0 top-0 bottom-0 w-10 bg-muted/50 border-r border-border/40 flex flex-col pt-3 pl-2 text-[10px] text-muted-foreground font-mono pointer-events-none select-none overflow-hidden">
+                {jsonText.split('\n').map((_, i) => (
+                  <div key={i} className="leading-5">
+                    {i + 1}
+                  </div>
+                ))}
+              </div>
+              <textarea
+                className="w-full pl-12 pr-3 py-3 bg-transparent font-mono text-xs leading-5 resize-none focus:outline-none min-h-[420px] text-foreground"
+                value={jsonText}
+                onChange={(e) => handleTextChange(e.target.value)}
+                spellCheck={false}
+              />
+            </div>
+
+            {parseError && (
+              <p className="text-xs text-destructive font-mono bg-destructive/5 border border-destructive/20 rounded-md px-3 py-2">
+                {parseError}
+              </p>
+            )}
+
+            <div className="flex gap-2">
+              <Button variant="outline" size="sm" onClick={handleReset} className="gap-1.5">
+                <RefreshCw className="h-3.5 w-3.5" />
+                Reset
+              </Button>
+              <Button
+                size="sm"
+                disabled={!!parseError || !selectedRubric || saved || !isWeightValid}
+                onClick={handleSave}
+                className="gap-1.5 ml-auto"
+              >
+                <Save className="h-3.5 w-3.5" />
+                {saved ? 'Saved ✓' : 'Save Changes'}
+              </Button>
+            </div>
+          </div>
+
+          {/* RIGHT: Live criteria preview */}
+          <div className="space-y-3">
+            <Label className="flex items-center gap-2 text-sm font-semibold">
+              <Layers className="h-4 w-4 text-primary" />
+              Live Preview — Configured Rules ({liveCriteria.length})
+            </Label>
+
+            <div className="space-y-3">
+              {liveCriteria.map((criterion, idx) => {
+                const ruleType: KinematicRuleType = criterion.ruleType || 'joint_angle_range';
+                const info = RULE_TYPE_INFO[ruleType] || RULE_TYPE_INFO.joint_angle_range;
+                return (
+                  <Card key={criterion.id ?? idx} className="border-border/60">
+                    <CardHeader className="pb-2 pt-4">
+                      <div className="flex items-center justify-between gap-2">
+                        <CardTitle className="text-sm leading-snug">{criterion.label}</CardTitle>
+                        <Badge variant="outline" className="shrink-0 text-xs">
+                          Weight: {criterion.weight}%
+                        </Badge>
+                      </div>
+                      <div className="flex items-center gap-2 mt-1">
+                        <Badge className="bg-primary/10 text-primary border-primary/20 text-[10px]">
+                          {info.label}
+                        </Badge>
+                        <span className="text-[11px] font-mono text-muted-foreground">
+                          Target: {criterion.targetMin ?? 0}–{criterion.targetMax ?? 0} {info.unit} (±{criterion.tolerance ?? 0})
+                        </span>
+                      </div>
+                      <p className="text-xs text-muted-foreground mt-1">{criterion.description}</p>
+                    </CardHeader>
+                  </Card>
+                );
+              })}
+            </div>
+
+            {/* Weight total */}
+            {liveCriteria.length > 0 && !parseError && (
+              <div
+                className={cn(
+                  'flex items-center justify-between rounded-lg px-4 py-3 text-sm',
+                  isWeightValid
+                    ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-600'
+                    : 'bg-amber-500/10 border border-amber-500/20 text-amber-600'
+                )}
+              >
+                <span>Total criterion weight</span>
+                <span className="font-bold">
+                  {totalWeight}% {isWeightValid ? '✓' : '✗ (must equal 100%)'}
+                </span>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

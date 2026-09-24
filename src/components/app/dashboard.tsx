@@ -73,6 +73,7 @@ const DEFAULT_VIEW: Record<string, string> = {
 function DashboardInner() {
   const { activeRole } = useApp();
   const [activeView, setActiveView] = useState(DEFAULT_VIEW[activeRole] ?? 'catalog');
+  const [selectedSkillId, setSelectedSkillId] = useState<string>('cpr');
   const [evaluatingId, setEvaluatingId] = useState<string | null>(null);
   const [verifyingCertCode, setVerifyingCertCode] = useState<string | null>(null);
 
@@ -105,23 +106,28 @@ function DashboardInner() {
       if (activeView === 'catalog') {
         return (
           <SkillCatalog
-            onStartAssessment={() => setActiveView('instructions')}
+            onStartAssessment={(skillId) => {
+              setSelectedSkillId(skillId);
+              setActiveView('instructions');
+            }}
           />
         );
       }
       if (activeView === 'instructions') {
         return (
-          <AssessmentInstructions 
-            onBack={() => setActiveView('catalog')} 
-            onStartCapture={() => setActiveView('capture')} 
+          <AssessmentInstructions
+            skillId={selectedSkillId}
+            onBack={() => setActiveView('catalog')}
+            onStartCapture={() => setActiveView('capture')}
           />
         );
       }
       if (activeView === 'capture') {
         return (
-          <VideoCapture 
-            onBack={() => setActiveView('instructions')} 
-            onComplete={() => setActiveView('progress')} 
+          <VideoCapture
+            skillId={selectedSkillId}
+            onBack={() => setActiveView('instructions')}
+            onComplete={() => setActiveView('progress')}
           />
         );
       }

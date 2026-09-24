@@ -99,6 +99,29 @@ export interface Trade extends TenantScoped, Auditable {
 
 // ── rubrics ──────────────────────────────────────────────────
 
+export type KinematicRuleType =
+  | 'depth_normalized'
+  | 'frequency_bpm'
+  | 'recoil_completeness'
+  | 'joint_angle_range'
+  | 'travel_speed'
+  | 'path_stability'
+  | 'posture_variance'
+  | 'custom';
+
+export interface KinematicRuleParams {
+  ruleType?: KinematicRuleType;
+  targetMin?: number;
+  targetMax?: number;
+  tolerance?: number;
+  unit?: string;
+  landmarks?: string[];
+  landmark?: string;
+  maxDeviation?: number;
+  maxIncompletePct?: number;
+  optimalScore?: number;
+}
+
 /**
  * A rubric defines the scoring criteria for a trade.
  * The `config` column is a JSON blob that holds the structured
@@ -124,7 +147,7 @@ export interface RubricConfig {
   total_weight: number;
 }
 
-export interface RubricCriterion {
+export interface RubricCriterion extends KinematicRuleParams {
   id: string;
   label: string;
   description: string;

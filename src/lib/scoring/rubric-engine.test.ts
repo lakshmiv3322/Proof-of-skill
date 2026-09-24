@@ -95,4 +95,157 @@ describe('RubricEngine Scoring Bands', () => {
     expect(nearResult.metrics.actualDepthCm).toBeCloseTo(5.5, 1);
     expect(farResult.metrics.actualDepthCm).toBeCloseTo(5.5, 1);
   });
+
+  it('evaluates rule-configured CPR rubric with identical scores', () => {
+    const jsonRuleRubric: RubricConfig = {
+      total_weight: 100,
+      scoring_scale: {
+        min: 0,
+        max: 100,
+        bands: [{ label: 'Pass', min: 70, max: 100, color: 'blue' }],
+      },
+      criteria: [
+        {
+          id: 'crit-rate',
+          label: 'Compression Rate',
+          ruleType: 'frequency_bpm',
+          targetMin: 100,
+          targetMax: 120,
+          tolerance: 10,
+          weight: 35,
+          description: '100–120 BPM',
+          indicators: [],
+        },
+        {
+          id: 'crit-depth',
+          label: 'Compression Depth',
+          ruleType: 'depth_normalized',
+          targetMin: 5.0,
+          targetMax: 6.0,
+          tolerance: 0.5,
+          weight: 35,
+          description: '5.0–6.0 cm',
+          indicators: [],
+        },
+        {
+          id: 'crit-recoil',
+          label: 'Full Chest Recoil',
+          ruleType: 'recoil_completeness',
+          maxIncompletePct: 5,
+          weight: 15,
+          description: '<5% incomplete',
+          indicators: [],
+        },
+        {
+          id: 'crit-posture',
+          label: 'Rescuer Posture',
+          ruleType: 'posture_variance',
+          targetMin: 0,
+          targetMax: 15,
+          weight: 15,
+          description: 'Straight arms',
+          indicators: [],
+        },
+      ],
+    };
+
+    const result = evaluateSubmissionWithLandmarks('sub-rule-cpr', jsonRuleRubric, []);
+    expect(result.overallScore).toBeGreaterThanOrEqual(80);
+    expect(result.criteriaScores['crit-rate']).toBe(100);
+    expect(result.criteriaScores['crit-depth']).toBe(100);
+    expect(result.criteriaScores['crit-recoil']).toBe(100);
+    expect(result.criteriaScores['crit-posture']).toBe(100);
+  });
+
+  it('evaluates rule-configured Welding rubric (SMAW) end-to-end', () => {
+    const weldingRubric: RubricConfig = {
+      total_weight: 100,
+      scoring_scale: {
+        min: 0,
+        max: 100,
+        bands: [
+          { label: 'Certified', min: 75, max: 100, color: 'emerald' },
+          { label: 'Unsatisfactory', min: 0, max: 74, color: 'red' },
+        ],
+      },
+      criteria: [
+        {
+          id: 'weld-travel-speed',
+          label: 'Travel Speed Progression',
+          ruleType: 'travel_speed',
+          landmark: 'right_wrist',
+          targetMin: 2.5,
+          targetMax: 4.5,
+          tolerance: 1.0,
+          unit: 'mm/s',
+          weight: 30,
+          description: 'Maintain 2.5–4.5 mm/s',
+          indicators: ['2.5–4.5 mm/s'],
+        },
+        {
+          id: 'weld-torch-angle',
+          label: 'Lead/Work Torch Angle',
+          ruleType: 'joint_angle_range',
+          landmarks: ['right_shoulder', 'right_elbow', 'right_wrist'],
+          targetMin: 70,
+          targetMax: 85,
+          tolerance: 10,
+          unit: 'deg',
+          weight: 30,
+          description: '70°–85° drag angle',
+          indicators: ['70°–85°'],
+        },
+        {
+          id: 'weld-arc-stability',
+          label: 'Arc Length & Standoff Stability',
+          ruleType: 'path_stability',
+          landmark: 'right_wrist',
+          maxDeviation: 1.2,
+          tolerance: 0.5,
+          unit: 'cm',
+          weight: 25,
+          description: '< 1.2 cm wandering',
+          indicators: ['< 1.2 cm'],
+        },
+        {
+          id: 'weld-safety-posture',
+          label: 'Welder Stance & Body Clearance',
+          ruleType: 'posture_variance',
+          targetMin: 0,
+          targetMax: 70,
+          tolerance: 15,
+          weight: 15,
+          description: 'Proper welder stance',
+          indicators: ['Stable stance'],
+        },
+      ],
+    };
+
+    const frameCount = 30;
+    const weldingLandmarks: PoseLandmark[] = Array.from({ length: frameCount }, (_, i) => {
+      // Shoulder width = 0.30 frame units (39.0 cm -> 130 cm/unit)
+      // Shoulder at (0.50, 0.15), Elbow at (0.50, 0.35) -> v1 = (0, -0.20)
+      // Wrist at (0.693, 0.30) -> v2 = (0.193, -0.05) -> Angle is exactly 75.5° (optimal 70-85° window)
+      // Travel: 0.35 cm in 1 sec = 0.00269 frame units displacement -> ~3.5 mm/s
+      const xProgress = (i / frameCount) * 0.00269;
+      return {
+        frame: i,
+        timestamp_ms: i * 33.3,
+        points: [
+          { name: 'left_shoulder', x: 0.20, y: 0.15, z: 0, visibility: 0.99 },
+          { name: 'right_shoulder', x: 0.50, y: 0.15, z: 0, visibility: 0.99 },
+          { name: 'right_elbow', x: 0.50, y: 0.35, z: 0, visibility: 0.99 },
+          { name: 'right_wrist', x: 0.693 + xProgress, y: 0.30, z: 0, visibility: 0.99 },
+        ],
+      };
+    });
+
+    const result = evaluateSubmissionWithLandmarks('sub-weld-1', weldingRubric, weldingLandmarks);
+    expect(result.overallScore).toBeGreaterThanOrEqual(75);
+    expect(result.criteriaScores['weld-travel-speed']).toBe(100);
+    expect(result.criteriaScores['weld-torch-angle']).toBe(100);
+    expect(result.criteriaScores['weld-arc-stability']).toBe(100);
+    expect(result.criteriaScores['weld-safety-posture']).toBe(100);
+    expect(result.deltas.length).toBe(4);
+  });
 });

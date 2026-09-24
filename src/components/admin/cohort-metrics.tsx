@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Skeleton } from '@/components/ui/skeleton';
 import { useApp } from '@/context/app-context';
 import {
   BarChart,
@@ -293,9 +294,13 @@ export function CohortMetrics() {
                     {kpi.trendVal}
                   </span>
                 </div>
-                <p className="mt-2 text-2xl font-extrabold tracking-tight font-serif">
-                  {isLoading ? '…' : kpi.value}
-                </p>
+                {isLoading ? (
+                  <Skeleton className="h-8 w-20 mt-2" />
+                ) : (
+                  <p className="mt-2 text-2xl font-extrabold tracking-tight font-serif">
+                    {kpi.value}
+                  </p>
+                )}
                 <p className="mt-0.5 text-xs font-medium">{kpi.label}</p>
                 <p className="text-[10px] text-muted-foreground font-mono">{kpi.sub}</p>
               </CardContent>

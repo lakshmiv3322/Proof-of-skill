@@ -10,7 +10,6 @@ import {
   Info,
   Lightbulb,
   Smartphone,
-  TriangleAlert,
   Upload,
   Zap,
 } from 'lucide-react';

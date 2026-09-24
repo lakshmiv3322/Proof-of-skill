@@ -12,7 +12,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { Separator } from '@/components/ui/separator';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { useApp } from '@/context/app-context';
 import { logAudit } from '@/lib/supabase/audit';
 import { DEFAULT_CPR_RUBRIC_CONFIG, DEFAULT_WELDING_RUBRIC_CONFIG } from '@/lib/scoring/rubric-engine';
@@ -28,9 +37,6 @@ import {
   Trash2,
   Sliders,
   Settings2,
-  Activity,
-  Zap,
-  Heart,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -150,8 +156,9 @@ export function RubricEditor() {
   const [editorMode, setEditorMode] = useState<'visual' | 'json'>('visual');
   const [jsonText, setJsonText] = useState<string>(prettyJson(DEFAULT_DEMO_RUBRICS[0].config));
   const [parseError, setParseError] = useState<string | null>(null);
-  const [saveError, setSaveError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const [criterionToDeleteIdx, setCriterionToDeleteIdx] = useState<number | null>(null);
+  const [isResetModalOpen, setIsResetModalOpen] = useState(false);
 
   useEffect(() => {
     if (!activeUser?.institute_id) return;
@@ -266,7 +273,6 @@ export function RubricEditor() {
 
   const handleSave = async () => {
     if (parseError || !selectedRubric) return;
-    setSaveError(null);
     try {
       const config = JSON.parse(jsonText) as Rubric['config'];
       const previousConfig = selectedRubric.config;
@@ -424,49 +430,63 @@ export function RubricEditor() {
             </div>
 
             <div className="space-y-4">
-              {liveCriteria.map((criterion, idx) => {
-                const ruleType: KinematicRuleType = criterion.ruleType || 'joint_angle_range';
-                const info = RULE_TYPE_INFO[ruleType] || RULE_TYPE_INFO.joint_angle_range;
+              {liveCriteria.length === 0 ? (
+                <Card className="p-8 text-center border-dashed">
+                  <Sliders className="h-10 w-10 text-muted-foreground/40 mx-auto mb-3" />
+                  <p className="text-sm font-semibold">No Kinematic Rules Configured</p>
+                  <p className="text-xs text-muted-foreground mt-1 max-w-sm mx-auto">
+                    Add your first rule criteria to define target joint angles, cadence frequency, or velocity thresholds for this rubric.
+                  </p>
+                  <Button size="sm" onClick={handleAddCriterion} className="mt-4 gap-1.5 text-xs">
+                    <Plus className="h-3.5 w-3.5" />
+                    Add First Kinematic Rule
+                  </Button>
+                </Card>
+              ) : (
+                liveCriteria.map((criterion, idx) => {
+                  const ruleType: KinematicRuleType = criterion.ruleType || 'joint_angle_range';
+                  const info = RULE_TYPE_INFO[ruleType] || RULE_TYPE_INFO.joint_angle_range;
 
-                return (
-                  <Card key={criterion.id || idx} className="border-border/80 shadow-sm">
-                    <CardHeader className="pb-3 pt-4">
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="flex-1 space-y-2">
-                          <div className="flex items-center gap-2">
-                            <Input
-                              value={criterion.label}
-                              onChange={(e) => handleUpdateCriterion(idx, { label: e.target.value })}
-                              placeholder="Rule Label (e.g. Lead Torch Angle)"
-                              className="font-semibold text-sm h-8"
-                            />
-                            <div className="flex items-center gap-1 shrink-0">
-                              <span className="text-xs text-muted-foreground font-mono">Weight:</span>
+                  return (
+                    <Card key={criterion.id || idx} className="border-border/80 shadow-sm">
+                      <CardHeader className="pb-3 pt-4">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex-1 space-y-2">
+                            <div className="flex items-center gap-2">
                               <Input
-                                type="number"
-                                min={0}
-                                max={100}
-                                value={criterion.weight}
-                                onChange={(e) =>
-                                  handleUpdateCriterion(idx, { weight: Number(e.target.value) || 0 })
-                                }
-                                className="w-16 h-8 text-xs font-mono text-center"
+                                value={criterion.label}
+                                onChange={(e) => handleUpdateCriterion(idx, { label: e.target.value })}
+                                placeholder="Rule Label (e.g. Lead Torch Angle)"
+                                className="font-semibold text-sm h-8"
                               />
-                              <span className="text-xs text-muted-foreground">%</span>
+                              <div className="flex items-center gap-1 shrink-0">
+                                <span className="text-xs text-muted-foreground font-mono">Weight:</span>
+                                <Input
+                                  type="number"
+                                  min={0}
+                                  max={100}
+                                  value={criterion.weight}
+                                  onChange={(e) =>
+                                    handleUpdateCriterion(idx, { weight: Number(e.target.value) || 0 })
+                                  }
+                                  className="w-16 h-8 text-xs font-mono text-center"
+                                />
+                                <span className="text-xs text-muted-foreground">%</span>
+                              </div>
                             </div>
                           </div>
-                        </div>
 
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          onClick={() => handleDeleteCriterion(idx)}
-                          className="h-8 w-8 text-muted-foreground hover:text-destructive shrink-0"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    </CardHeader>
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            onClick={() => setCriterionToDeleteIdx(idx)}
+                            className="h-8 w-8 text-muted-foreground hover:text-destructive shrink-0"
+                            title="Delete kinematic rule"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      </CardHeader>
 
                     <CardContent className="space-y-3 pt-0 text-xs">
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -563,7 +583,7 @@ export function RubricEditor() {
                     </CardContent>
                   </Card>
                 );
-              })}
+              }))}
             </div>
           </div>
 
@@ -611,7 +631,12 @@ export function RubricEditor() {
                     <Save className="h-3.5 w-3.5" />
                     {saved ? 'Saved Successfully ✓' : 'Save Rubric to Database'}
                   </Button>
-                  <Button variant="outline" size="sm" onClick={handleReset} className="w-full gap-1.5 text-xs">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setIsResetModalOpen(true)}
+                    className="w-full gap-1.5 text-xs"
+                  >
                     <RefreshCw className="h-3.5 w-3.5" />
                     Reset Changes
                   </Button>
@@ -666,7 +691,12 @@ export function RubricEditor() {
             )}
 
             <div className="flex gap-2">
-              <Button variant="outline" size="sm" onClick={handleReset} className="gap-1.5">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setIsResetModalOpen(true)}
+                className="gap-1.5"
+              >
                 <RefreshCw className="h-3.5 w-3.5" />
                 Reset
               </Button>
@@ -736,6 +766,65 @@ export function RubricEditor() {
           </div>
         </div>
       )}
+
+      {/* Confirmation Dialog: Delete Kinematic Rule */}
+      <AlertDialog
+        open={criterionToDeleteIdx !== null}
+        onOpenChange={(open) => {
+          if (!open) setCriterionToDeleteIdx(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Kinematic Rule?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to remove{' '}
+              <span className="font-semibold text-foreground">
+                {criterionToDeleteIdx !== null ? liveCriteria[criterionToDeleteIdx]?.label || 'this rule' : 'this rule'}
+              </span>{' '}
+              from the rubric? Kinematic angle and tolerance constraints for this metric will be deleted.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => {
+                if (criterionToDeleteIdx !== null) {
+                  handleDeleteCriterion(criterionToDeleteIdx);
+                  setCriterionToDeleteIdx(null);
+                }
+              }}
+            >
+              Delete Rule
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Confirmation Dialog: Reset Rubric Changes */}
+      <AlertDialog open={isResetModalOpen} onOpenChange={setIsResetModalOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Discard Unsaved Changes?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will restore the rubric to its last saved database configuration. Any unsaved criteria weights, thresholds, or descriptors will be lost.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep Editing</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => {
+                handleReset();
+                setIsResetModalOpen(false);
+              }}
+            >
+              Discard Changes
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

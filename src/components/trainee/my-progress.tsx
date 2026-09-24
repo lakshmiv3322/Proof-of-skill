@@ -301,15 +301,15 @@ export function MyProgress({ onViewCertificate }: MyProgressProps) {
       {/* KPI cards */}
       <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
         {[
-          { label: 'Total Submissions', value: isLoading ? '…' : stats.total, icon: FileVideo, color: 'text-primary' },
-          { label: 'Passed', value: isLoading ? '…' : stats.passed, icon: CheckCircle2, color: 'text-emerald-500' },
+          { label: 'Total Submissions', value: stats.total, icon: FileVideo, color: 'text-primary' },
+          { label: 'Passed', value: stats.passed, icon: CheckCircle2, color: 'text-emerald-500' },
           {
             label: 'Avg. Score',
-            value: isLoading ? '…' : `${stats.avgScore.toFixed(1)}%`,
+            value: `${stats.avgScore.toFixed(1)}%`,
             icon: TrendingUp,
             color: 'text-blue-500',
           },
-          { label: 'Certificates', value: isLoading ? '…' : certs.length, icon: Award, color: 'text-amber-500' },
+          { label: 'Certificates', value: certs.length, icon: Award, color: 'text-amber-500' },
         ].map(({ label, value, icon: Icon, color }) => (
           <Card key={label} className="flex flex-col gap-1">
             <CardHeader className="pb-1 pt-4 px-4">
@@ -319,7 +319,11 @@ export function MyProgress({ onViewCertificate }: MyProgressProps) {
               </div>
             </CardHeader>
             <CardContent className="pb-4 px-4">
-              <p className="text-2xl font-extrabold tracking-tight font-serif">{value}</p>
+              {isLoading ? (
+                <Skeleton className="h-8 w-16" />
+              ) : (
+                <p className="text-2xl font-extrabold tracking-tight font-serif">{value}</p>
+              )}
             </CardContent>
           </Card>
         ))}

@@ -5,7 +5,7 @@
 // mathematical rule interpretation applied to kinematic landmark metrics.
 // LLMs are NEVER allowed to set or modify the score.
 // ─────────────────────────────────────────────────────────────
-import { calculateRealDTW, computeAnatomicalScaleReference, STANDARD_BIACROMIAL_WIDTH_CM } from './dtw';
+import { calculateRealDTW, computeAnatomicalScaleReference } from './dtw';
 import type { RubricConfig, RubricCriterion, PoseLandmark, PosePoint } from '@/types/database';
 import { supabase } from '@/lib/supabase/client';
 

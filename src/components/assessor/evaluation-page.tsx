@@ -11,6 +11,17 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
 import { Separator } from '@/components/ui/separator';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { Skeleton } from '@/components/ui/skeleton';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { OverrideForm } from './override-form';
 import { SubmissionVideoPlayer, type VideoAnnotation } from './submission-video-player';
 import { useApp } from '@/context/app-context';
@@ -26,7 +37,6 @@ import {
   User,
   Layers,
   ArrowLeft,
-  Loader2,
   CheckCircle2,
   XCircle,
   AlertTriangle,
@@ -114,6 +124,9 @@ export function EvaluationPage({ submissionId = 'sub-0000-0001', onBack }: Evalu
   const [savedOverrides, setSavedOverrides] = useState<Record<string, number>>({});
   const [showOverride, setShowOverride] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [isApproveModalOpen, setIsApproveModalOpen] = useState(false);
+  const [isFailModalOpen, setIsFailModalOpen] = useState(false);
+  const [isProcessingAction, setIsProcessingAction] = useState(false);
 
   // Compute anatomical scale validity for visible warning on occlusion/cropping fallback
   const scaleInfo = useMemo(() => {
@@ -372,8 +385,9 @@ export function EvaluationPage({ submissionId = 'sub-0000-0001', onBack }: Evalu
 
   const hasOverrides = Object.keys(savedOverrides).length > 0;
 
-  // ── Approve & Issue Certificate ─────────────────────────────
-  const handleApprove = async () => {
+  // ── Approve & Issue Certificate (Authoritative Confirmation) ──
+  const confirmApprove = async () => {
+    setIsProcessingAction(true);
     setSaveError(null);
     const verificationCode = `POS-${profile.tradeId.replace('trade-', '').toUpperCase()}-2026-${Math.floor(Math.random() * 899 + 100)}AH`;
     const certId = `cert-${crypto.randomUUID()}`;
@@ -426,18 +440,85 @@ export function EvaluationPage({ submissionId = 'sub-0000-0001', onBack }: Evalu
           ip_address: null,
         });
       }
+      setIsApproveModalOpen(false);
       onBack();
     } catch (err: unknown) {
       console.warn('[EvaluationPage] Certificate issue fallback:', err);
+      setIsApproveModalOpen(false);
       onBack();
+    } finally {
+      setIsProcessingAction(false);
+    }
+  };
+
+  const confirmFail = async () => {
+    setIsProcessingAction(true);
+    try {
+      await logAudit({
+        institute_id: activeUser.institute_id,
+        actor_id: activeUser.id,
+        actor_role: activeUser.role,
+        action: 'submission.failed',
+        entity_type: 'submission',
+        entity_id: submissionId,
+        metadata: {
+          submission_id: submissionId,
+          student_name: profile.fullName,
+          trade: profile.tradeName,
+          overall_score: effectiveScore,
+          state_before: { submission_status: 'under_review' },
+          state_after: { submission_status: 'failed', rejection_reason: 'Assessor determined criteria not fully met.' },
+        },
+        ip_address: null,
+      });
+
+      if (isSupabaseConfigured) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        await (db as any)
+          .from('submissions')
+          .update({ status: 'failed', reviewed_at: new Date().toISOString() })
+          .eq('id', submissionId);
+      }
+
+      setIsFailModalOpen(false);
+      onBack();
+    } catch (err) {
+      console.warn('[EvaluationPage] fail submission error:', err);
+      setIsFailModalOpen(false);
+      onBack();
+    } finally {
+      setIsProcessingAction(false);
     }
   };
 
   if (isLoading) {
     return (
-      <div className="flex flex-col items-center justify-center p-16 gap-3 text-muted-foreground">
-        <Loader2 className="h-8 w-8 animate-spin text-primary" />
-        <p className="text-sm font-mono">Loading submission evidence & rubric criteria…</p>
+      <div className="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto space-y-6 animate-in fade-in duration-300">
+        <div className="flex items-center justify-between">
+          <Skeleton className="h-8 w-48" />
+          <div className="flex gap-2">
+            <Skeleton className="h-6 w-24 rounded-full" />
+            <Skeleton className="h-6 w-32 rounded-full" />
+          </div>
+        </div>
+
+        <div className="grid gap-6 lg:grid-cols-2">
+          {/* Left Col Skeletons */}
+          <div className="space-y-4">
+            <Skeleton className="aspect-video w-full rounded-xl" />
+            <Skeleton className="h-36 w-full rounded-xl" />
+            <Skeleton className="h-28 w-full rounded-xl" />
+          </div>
+          {/* Right Col Skeletons */}
+          <div className="space-y-4">
+            <Skeleton className="h-32 w-full rounded-xl" />
+            <div className="space-y-3">
+              <Skeleton className="h-24 w-full rounded-xl" />
+              <Skeleton className="h-24 w-full rounded-xl" />
+              <Skeleton className="h-24 w-full rounded-xl" />
+            </div>
+          </div>
+        </div>
       </div>
     );
   }
@@ -657,14 +738,14 @@ export function EvaluationPage({ submissionId = 'sub-0000-0001', onBack }: Evalu
         {saveError && (
           <div className="flex flex-col gap-2 p-3 bg-destructive/5 border border-destructive/20 rounded-md">
             <p className="text-xs text-destructive font-mono">{saveError}</p>
-            <Button size="sm" variant="outline" onClick={handleApprove} className="w-fit self-start h-7 text-xs">
+            <Button size="sm" variant="outline" onClick={confirmApprove} className="w-fit self-start h-7 text-xs">
               Retry
             </Button>
           </div>
         )}
         <Button
           className="ml-auto bg-emerald-600 hover:bg-emerald-500 text-white font-semibold gap-1.5"
-          onClick={handleApprove}
+          onClick={() => setIsApproveModalOpen(true)}
         >
           <CheckCircle2 className="h-4 w-4" />
           Approve & Issue Certificate
@@ -672,26 +753,7 @@ export function EvaluationPage({ submissionId = 'sub-0000-0001', onBack }: Evalu
         <Button
           variant="outline"
           className="text-destructive hover:text-destructive gap-1.5"
-          onClick={async () => {
-            await logAudit({
-              institute_id: activeUser.institute_id,
-              actor_id: activeUser.id,
-              actor_role: activeUser.role,
-              action: 'submission.failed',
-              entity_type: 'submission',
-              entity_id: submissionId,
-              metadata: {
-                submission_id: submissionId,
-                student_name: profile.fullName,
-                trade: profile.tradeName,
-                overall_score: effectiveScore,
-                state_before: { submission_status: 'under_review' },
-                state_after: { submission_status: 'failed', rejection_reason: 'Assessor determined criteria not fully met.' },
-              },
-              ip_address: null,
-            });
-            onBack();
-          }}
+          onClick={() => setIsFailModalOpen(true)}
         >
           <XCircle className="h-4 w-4" />
           Flag as Failed
@@ -707,6 +769,83 @@ export function EvaluationPage({ submissionId = 'sub-0000-0001', onBack }: Evalu
           onCancel={() => setShowOverride(false)}
         />
       )}
+
+      {/* Confirmation Dialog: Approve & Issue Certificate */}
+      <AlertDialog open={isApproveModalOpen} onOpenChange={setIsApproveModalOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2 text-emerald-600">
+              <CheckCircle2 className="h-5 w-5" />
+              Issue Official Certification?
+            </AlertDialogTitle>
+            <AlertDialogDescription className="space-y-2 text-xs">
+              <p>
+                You are issuing an accredited certification for{' '}
+                <strong className="text-foreground">{profile.fullName}</strong> in{' '}
+                <strong className="text-foreground">{profile.tradeName}</strong>.
+              </p>
+              <div className="rounded-md border border-border/80 bg-muted/40 p-3 space-y-1">
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Certified Score:</span>
+                  <span className="font-bold text-foreground font-mono">{effectiveScore.toFixed(1)}%</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Trainee ID:</span>
+                  <span className="font-mono text-foreground">{profile.traineeId}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Assessor ID:</span>
+                  <span className="font-mono text-foreground">{activeUser.full_name}</span>
+                </div>
+              </div>
+              <p className="text-muted-foreground">
+                This certification will be recorded permanently to the audit log and a verifiable digital credential will be generated.
+              </p>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isProcessingAction}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={isProcessingAction}
+              className="bg-emerald-600 hover:bg-emerald-500 text-white font-semibold"
+              onClick={confirmApprove}
+            >
+              {isProcessingAction ? 'Issuing Certificate…' : 'Confirm & Issue'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Confirmation Dialog: Flag as Failed */}
+      <AlertDialog open={isFailModalOpen} onOpenChange={setIsFailModalOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2 text-destructive">
+              <XCircle className="h-5 w-5" />
+              Flag Submission as Failed?
+            </AlertDialogTitle>
+            <AlertDialogDescription className="space-y-2 text-xs">
+              <p>
+                Are you sure you want to flag this submission by{' '}
+                <strong className="text-foreground">{profile.fullName}</strong> as failed?
+              </p>
+              <p className="text-muted-foreground">
+                The trainee will be notified to review rubric feedback and submit a new attempt. This outcome is logged in the compliance audit trail.
+              </p>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isProcessingAction}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={isProcessingAction}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={confirmFail}
+            >
+              {isProcessingAction ? 'Recording…' : 'Flag as Failed'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

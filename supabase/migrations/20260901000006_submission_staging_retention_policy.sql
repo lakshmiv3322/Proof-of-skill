@@ -24,19 +24,21 @@ BEGIN
 
   -- Log audit event if any rows were purged
   IF v_deleted_count > 0 THEN
-    INSERT INTO public.audit_logs (
+    INSERT INTO public.audit_log (
       institute_id,
       actor_id,
+      actor_role,
       action,
       entity_type,
       entity_id,
-      details,
+      metadata,
       created_at
     )
     SELECT
       id,
       '00000000-0000-0000-0000-000000000001'::uuid,
-      'STAGING_CLEANUP_PURGED',
+      'platform_admin'::user_role,
+      'staging.purged',
       'submission_staging',
       gen_random_uuid(),
       jsonb_build_object(

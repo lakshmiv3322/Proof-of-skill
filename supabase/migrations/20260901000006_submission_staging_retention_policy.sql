@@ -14,16 +14,34 @@ SET search_path = public
 AS $$
 DECLARE
   v_deleted_count integer;
+  v_storage_deleted integer := 0;
 BEGIN
-  -- Delete completed staging records older than the retention window
+  -- 1. Delete completed staging records older than the retention window
   DELETE FROM public.submission_staging
   WHERE status = 'completed'
     AND created_at < (now() - (p_retention_days || ' days')::interval);
 
   GET DIAGNOSTICS v_deleted_count = ROW_COUNT;
 
-  -- Log audit event if any rows were purged
-  IF v_deleted_count > 0 THEN
+  -- 2. Clean up orphaned video objects in storage.objects for 'submission-videos' bucket
+  -- that are NOT referenced in public.submissions.video_url
+  BEGIN
+    DELETE FROM storage.objects
+    WHERE bucket_id = 'submission-videos'
+      AND name NOT IN (
+        SELECT COALESCE(NULLIF(video_url, ''), 'NO_MATCH') FROM public.submissions
+      )
+      AND created_at < (now() - (p_retention_days || ' days')::interval);
+    
+    GET DIAGNOSTICS v_storage_deleted = ROW_COUNT;
+  EXCEPTION
+    WHEN OTHERS THEN
+      -- If storage schema is not directly accessible in current search path, log and continue
+      v_storage_deleted := 0;
+  END;
+
+  -- 3. Log audit event if any rows or storage files were purged
+  IF v_deleted_count > 0 OR v_storage_deleted > 0 THEN
     INSERT INTO public.audit_log (
       institute_id,
       actor_id,
@@ -43,6 +61,7 @@ BEGIN
       gen_random_uuid(),
       jsonb_build_object(
         'purged_count', v_deleted_count,
+        'storage_objects_purged', v_storage_deleted,
         'retention_days', p_retention_days,
         'executed_at', now()
       ),

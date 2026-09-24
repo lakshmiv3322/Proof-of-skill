@@ -668,6 +668,13 @@ export async function evaluateSubmissionServer(
       },
     });
 
+    if (error) {
+      const errBody = (error as any)?.context?.json ? await (error as any).context.json() : null;
+      if (errBody?.error === 'QUOTA_EXHAUSTED' || errBody?.error === 'UNAUTHORIZED') {
+        throw new Error(errBody.message || errBody.error);
+      }
+    }
+
     if (!error && data && data.overallScore !== undefined) {
       return {
         ...(data as RubricResult),
@@ -675,7 +682,10 @@ export async function evaluateSubmissionServer(
         isOfflineScore: false,
       };
     }
-  } catch (err) {
+  } catch (err: any) {
+    if (err?.message?.includes('quota') || err?.message?.includes('QUOTA_EXHAUSTED') || err?.message?.includes('UNAUTHORIZED')) {
+      throw err;
+    }
     console.info('[RubricEngine] Edge Function score-submission falling back to local computation:', err);
   }
 

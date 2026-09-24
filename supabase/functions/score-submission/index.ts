@@ -574,8 +574,9 @@ serve(async (req) => {
     } = body;
 
     // 1. Resolve and verify authentic user from JWT Bearer token
-    let traineeId = body.traineeId;
-    let instituteId = body.instituteId;
+    let traineeId: string | null = null;
+    let instituteId: string | null = null;
+    let isAuthenticated = false;
 
     const authHeader = req.headers.get("authorization");
     if (authHeader) {
@@ -590,26 +591,76 @@ serve(async (req) => {
         if (userRow) {
           traineeId = userRow.id;
           instituteId = userRow.institute_id;
+          isAuthenticated = true;
         }
       }
     }
 
     // Fallback to staging record if stagingId is provided
-    if (stagingId) {
+    if (!isAuthenticated && stagingId) {
       const { data: stagingRow } = await supabase
         .from("submission_staging")
         .select("*")
         .eq("id", stagingId)
         .single();
       if (stagingRow) {
-        traineeId = traineeId || stagingRow.trainee_id;
-        instituteId = instituteId || stagingRow.institute_id;
+        traineeId = stagingRow.trainee_id;
+        instituteId = stagingRow.institute_id;
       }
     }
 
-    // Fallback defaults for testing/offline environments
-    instituteId = instituteId || "00000000-0000-0000-0000-000000000001";
-    traineeId = traineeId || "00000000-0000-0000-0000-000000000002";
+    const devAllowAnon = Deno.env.get("DEV_ALLOW_ANON_FALLBACK") === "true";
+    if (!isAuthenticated && !devAllowAnon) {
+      console.warn("[ScoreSubmission] Unauthorized scoring attempt rejected.");
+      return new Response(
+        JSON.stringify({ error: "UNAUTHORIZED", message: "Server-authoritative scoring requires a valid authenticated session Bearer token." }),
+        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    if (!isAuthenticated && devAllowAnon) {
+      console.warn("[ScoreSubmission] ⚠️ SECURITY WARNING: Executing scoring with unauthenticated fallback in DEV mode.");
+      instituteId = instituteId || body.instituteId || "00000000-0000-0000-0000-000000000001";
+      traineeId = traineeId || body.traineeId || "00000000-0000-0000-0000-000000000002";
+    }
+
+    // 1b. Enforce Server-Side Monthly Quota
+    if (instituteId) {
+      const { data: instRow } = await supabase
+        .from("institutes")
+        .select("plan_tier")
+        .eq("id", instituteId)
+        .single();
+      
+      const planTier = instRow?.plan_tier || "starter";
+      const quotas: Record<string, number> = {
+        starter: 50,
+        growth: 200,
+        enterprise: 999999,
+      };
+      const maxQuota = quotas[planTier] ?? 50;
+
+      const now = new Date();
+      const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+
+      const { count: currentMonthCount } = await supabase
+        .from("submissions")
+        .select("id", { count: "exact", head: true })
+        .eq("institute_id", instituteId)
+        .gte("created_at", startOfMonth);
+
+      const usageCount = currentMonthCount ?? 0;
+      if (usageCount >= maxQuota) {
+        console.warn(`[ScoreSubmission] Quota exceeded for institute ${instituteId} on plan ${planTier} (${usageCount}/${maxQuota})`);
+        return new Response(
+          JSON.stringify({
+            error: "QUOTA_EXHAUSTED",
+            message: `Monthly assessment quota (${maxQuota}) exceeded for your institute plan (${planTier}). Please upgrade your plan to continue submissions.`,
+          }),
+          { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+    }
 
     // 2. Fetch authoritative rubric configuration from database
     let rubricConfig: RubricConfig | null = body.rubricConfig || null;

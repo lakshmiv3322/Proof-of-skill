@@ -199,3 +199,63 @@ export async function countUnsyncedQueue(): Promise<number> {
     return 0;
   }
 }
+
+// ── Sync unsynced offline submissions to Supabase staging ──────
+
+export async function syncOfflineSubmissionsToSupabase(supabaseClient: any): Promise<{ syncedCount: number; errors: number }> {
+  let syncedCount = 0;
+  let errors = 0;
+  try {
+    const db = await openDB();
+    const tx = db.transaction(STORE_NAME, 'readwrite');
+    const store = tx.objectStore(STORE_NAME);
+    const idx = store.index('syncedAt');
+    const req = idx.getAll(null);
+
+    const unsynced: OfflineSubmission[] = await new Promise((resolve, reject) => {
+      req.onsuccess = () => resolve(req.result || []);
+      req.onerror = () => reject(req.error);
+    });
+
+    for (const sub of unsynced) {
+      try {
+        const { error: stagingErr } = await supabaseClient
+          .from('submission_staging')
+          .insert({
+            institute_id: sub.instituteId,
+            trainee_id: sub.traineeId,
+            trade_id: sub.tradeId,
+            rubric_id: sub.rubricId,
+            video_url: sub.videoUrl || 'blob:offline-sync',
+            duration_seconds: 10,
+            raw_landmarks: [],
+            status: 'pending',
+          });
+
+        if (!stagingErr) {
+          await markSynced(sub.id);
+          syncedCount++;
+        } else {
+          errors++;
+        }
+      } catch {
+        errors++;
+      }
+    }
+  } catch (err) {
+    console.warn('[OfflineStore] Failed to sync offline queue:', err);
+  }
+  return { syncedCount, errors };
+}
+
+// Auto-register online event listener if in browser
+if (typeof window !== 'undefined') {
+  window.addEventListener('online', () => {
+    console.info('[OfflineStore] Network connection restored — triggering offline sync queue flush.');
+    import('@/lib/supabase/client').then(({ supabase }) => {
+      if (supabase) {
+        syncOfflineSubmissionsToSupabase(supabase).catch(() => {});
+      }
+    });
+  });
+}

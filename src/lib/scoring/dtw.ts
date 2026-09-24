@@ -113,6 +113,92 @@ export function compute1DDTW(seriesA: number[], seriesB: number[]): number {
   return +(dtw[n][m] / (n + m)).toFixed(3);
 }
 
+// ── Anthropometric Reference Constants ─────────────────────────
+// Standard human adult dimensions (ISO 7250 / CDC Anthropometric Reference)
+export const STANDARD_BIACROMIAL_WIDTH_CM = 39.0; // Bi-acromial shoulder breadth reference (cm)
+export const STANDARD_TORSO_LENGTH_CM     = 48.0; // Shoulder-to-hip trunk reference (cm)
+
+export interface AnatomicalScale {
+  cmPerUnit: number;
+  referenceType: 'shoulder_width' | 'torso_length' | 'default';
+  scaleDistance: number;
+}
+
+/**
+ * Computes anatomical scale in frame units using stable body landmarks
+ * (bi-acromial shoulder width or trunk length) to prevent camera-distance drift.
+ */
+export function computeAnatomicalScaleReference(landmarks: PoseLandmark[]): AnatomicalScale {
+  if (!landmarks || landmarks.length === 0) {
+    return { cmPerUnit: 195, referenceType: 'default', scaleDistance: 0 };
+  }
+
+  let totalShoulderDist = 0;
+  let shoulderFrames = 0;
+  let totalTorsoDist = 0;
+  let torsoFrames = 0;
+
+  for (const frame of landmarks) {
+    const pts = frame.points || [];
+    const ls = pts.find((p) => {
+      const n = (p.name || '').toLowerCase();
+      return n === 'left_shoulder' || n === 'point_11';
+    });
+    const rs = pts.find((p) => {
+      const n = (p.name || '').toLowerCase();
+      return n === 'right_shoulder' || n === 'point_12';
+    });
+    const lh = pts.find((p) => {
+      const n = (p.name || '').toLowerCase();
+      return n === 'left_hip' || n === 'point_23';
+    });
+    const rh = pts.find((p) => {
+      const n = (p.name || '').toLowerCase();
+      return n === 'right_hip' || n === 'point_24';
+    });
+
+    if (ls && rs && (ls.visibility ?? 1) > 0.25 && (rs.visibility ?? 1) > 0.25) {
+      const dist = Math.hypot(ls.x - rs.x, ls.y - rs.y);
+      if (dist > 0.005) {
+        totalShoulderDist += dist;
+        shoulderFrames++;
+      }
+    }
+
+    if (ls && rs && lh && rh && (lh.visibility ?? 1) > 0.25 && (rh.visibility ?? 1) > 0.25) {
+      const midShoulderX = (ls.x + rs.x) / 2;
+      const midShoulderY = (ls.y + rs.y) / 2;
+      const midHipX = (lh.x + rh.x) / 2;
+      const midHipY = (lh.y + rh.y) / 2;
+      const dist = Math.hypot(midShoulderX - midHipX, midShoulderY - midHipY);
+      if (dist > 0.005) {
+        totalTorsoDist += dist;
+        torsoFrames++;
+      }
+    }
+  }
+
+  if (shoulderFrames > 0) {
+    const avgShoulderDist = totalShoulderDist / shoulderFrames;
+    return {
+      cmPerUnit: STANDARD_BIACROMIAL_WIDTH_CM / avgShoulderDist,
+      referenceType: 'shoulder_width',
+      scaleDistance: avgShoulderDist,
+    };
+  }
+
+  if (torsoFrames > 0) {
+    const avgTorsoDist = totalTorsoDist / torsoFrames;
+    return {
+      cmPerUnit: STANDARD_TORSO_LENGTH_CM / avgTorsoDist,
+      referenceType: 'torso_length',
+      scaleDistance: avgTorsoDist,
+    };
+  }
+
+  return { cmPerUnit: 195, referenceType: 'default', scaleDistance: 0 };
+}
+
 /**
  * Extracts CPR cycle kinematics (BPM, depth, recoil, posture) from landmark sequence.
  */
@@ -128,19 +214,48 @@ export function extractKinematics(landmarks: PoseLandmark[]): TraineeKinematics 
     };
   }
 
-  const wristSeries = extractWristDisplacementSeries(landmarks);
+  // Extract raw unnormalized wrist displacement series
+  const rawYSeries: number[] = [];
+  for (const frame of landmarks) {
+    const pts = frame.points || [];
+    const leftWrist = pts.find((p) => {
+      const n = (p.name || '').toLowerCase();
+      return n === 'left_wrist' || n === 'point_15';
+    });
+    const rightWrist = pts.find((p) => {
+      const n = (p.name || '').toLowerCase();
+      return n === 'right_wrist' || n === 'point_16';
+    });
+
+    let y = 0.5;
+    if (leftWrist && rightWrist && (leftWrist.visibility ?? 1) > 0.25 && (rightWrist.visibility ?? 1) > 0.25) {
+      y = (leftWrist.y + rightWrist.y) / 2;
+    } else if (leftWrist && (leftWrist.visibility ?? 1) > 0.25) {
+      y = leftWrist.y;
+    } else if (rightWrist && (rightWrist.visibility ?? 1) > 0.25) {
+      y = rightWrist.y;
+    }
+    rawYSeries.push(y);
+  }
+
+  // Baseline normalized series for cycle peak/trough detection
+  const minY = Math.min(...rawYSeries);
+  const maxY = Math.max(...rawYSeries);
+  const range = maxY - minY || 1;
+  const normalizedSeries = rawYSeries.map((y) => (y - minY) / range);
+
   const totalDurationMs = landmarks[landmarks.length - 1].timestamp_ms - landmarks[0].timestamp_ms || 10000;
   const totalDurationSec = totalDurationMs / 1000;
 
-  // Peak detection (compression downstrokes)
+  // Peak detection (compression downstrokes: highest Y in downward screen space)
   const peaks: number[] = [];
   const troughs: number[] = [];
 
-  for (let i = 1; i < wristSeries.length - 1; i++) {
-    if (wristSeries[i] > 0.65 && wristSeries[i] > wristSeries[i - 1] && wristSeries[i] >= wristSeries[i + 1]) {
+  for (let i = 1; i < normalizedSeries.length - 1; i++) {
+    if (normalizedSeries[i] > 0.65 && normalizedSeries[i] > normalizedSeries[i - 1] && normalizedSeries[i] >= normalizedSeries[i + 1]) {
       peaks.push(i);
     }
-    if (wristSeries[i] < 0.35 && wristSeries[i] < wristSeries[i - 1] && wristSeries[i] <= wristSeries[i + 1]) {
+    if (normalizedSeries[i] < 0.35 && normalizedSeries[i] < normalizedSeries[i - 1] && normalizedSeries[i] <= normalizedSeries[i + 1]) {
       troughs.push(i);
     }
   }
@@ -151,28 +266,48 @@ export function extractKinematics(landmarks: PoseLandmark[]): TraineeKinematics 
   // Measure amplitude & recoil completeness
   let incompleteRecoilCount = 0;
   for (const troughIdx of troughs) {
-    if (wristSeries[troughIdx] > 0.20) {
+    if (normalizedSeries[troughIdx] > 0.20) {
       incompleteRecoilCount++;
     }
   }
   const recoilIncompletePct = +((incompleteRecoilCount / Math.max(1, troughs.length)) * 100).toFixed(1);
 
-  // Calibrate depth in cm (scale normalized excursion to adult human chest reference: ~5.5cm)
-  const avgPeak = peaks.length > 0 ? peaks.reduce((acc, idx) => acc + wristSeries[idx], 0) / peaks.length : 0.9;
-  const avgTrough = troughs.length > 0 ? troughs.reduce((acc, idx) => acc + wristSeries[idx], 0) / troughs.length : 0.1;
-  const excursion = Math.max(0.1, avgPeak - avgTrough);
-  const estimatedDepthCm = +(excursion * 5.8).toFixed(2);
+  // ── ANATOMICALLY NORMALIZED COMPRESSION DEPTH ───────────────────
+  // Measure raw physical excursion in frame coordinates
+  const avgRawPeak = peaks.length > 0 ? peaks.reduce((acc, idx) => acc + rawYSeries[idx], 0) / peaks.length : maxY;
+  const avgRawTrough = troughs.length > 0 ? troughs.reduce((acc, idx) => acc + rawYSeries[idx], 0) / troughs.length : minY;
+  const rawExcursion = Math.max(0.0001, avgRawPeak - avgRawTrough);
+
+  // Anatomical normalization: scale raw pixel/frame excursion by the trainee's anatomical reference
+  const anatomicalScale = computeAnatomicalScaleReference(landmarks);
+
+  let estimatedDepthCm: number;
+  if (anatomicalScale.scaleDistance > 0.005) {
+    estimatedDepthCm = +(rawExcursion * anatomicalScale.cmPerUnit).toFixed(2);
+  } else {
+    // Fallback if no body reference landmarks present
+    const normAvgPeak = peaks.length > 0 ? peaks.reduce((acc, idx) => acc + normalizedSeries[idx], 0) / peaks.length : 0.9;
+    const normAvgTrough = troughs.length > 0 ? troughs.reduce((acc, idx) => acc + normalizedSeries[idx], 0) / troughs.length : 0.1;
+    const normExcursion = Math.max(0.1, normAvgPeak - normAvgTrough);
+    estimatedDepthCm = +(normExcursion * 5.8).toFixed(2);
+  }
 
   // Posture angle analysis (shoulder to wrist verticality)
   let totalAngleDev = 0;
   let validAngleFrames = 0;
 
   for (const frame of landmarks) {
-    const pts = frame.points;
-    const shoulder = pts.find((p) => p.name === 'right_shoulder' || p.name === 'point_12');
-    const wrist = pts.find((p) => p.name === 'right_wrist' || p.name === 'point_16');
+    const pts = frame.points || [];
+    const shoulder = pts.find((p) => {
+      const n = (p.name || '').toLowerCase();
+      return n === 'right_shoulder' || n === 'point_12';
+    });
+    const wrist = pts.find((p) => {
+      const n = (p.name || '').toLowerCase();
+      return n === 'right_wrist' || n === 'point_16';
+    });
 
-    if (shoulder && wrist && (shoulder.visibility ?? 0) > 0.3 && (wrist.visibility ?? 0) > 0.3) {
+    if (shoulder && wrist && (shoulder.visibility ?? 1) > 0.3 && (wrist.visibility ?? 1) > 0.3) {
       const dx = wrist.x - shoulder.x;
       const dy = wrist.y - shoulder.y;
       const angleRad = Math.atan2(Math.abs(dx), Math.abs(dy));
@@ -187,7 +322,7 @@ export function extractKinematics(landmarks: PoseLandmark[]): TraineeKinematics 
   return {
     compressionCount,
     estimatedBpm: estimatedBpm >= 40 && estimatedBpm <= 200 ? estimatedBpm : 110,
-    estimatedDepthCm: estimatedDepthCm >= 2.0 && estimatedDepthCm <= 8.0 ? estimatedDepthCm : 5.4,
+    estimatedDepthCm: estimatedDepthCm >= 1.0 && estimatedDepthCm <= 12.0 ? estimatedDepthCm : 5.4,
     recoilIncompletePct: Math.min(100, recoilIncompletePct),
     postureAngleDeviationDeg,
   };

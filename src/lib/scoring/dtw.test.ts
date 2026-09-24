@@ -37,4 +37,69 @@ describe('DTW Kinematics Extraction', () => {
     expect(typeof result.estimatedDepthCm).toBe('number');
     expect(typeof result.recoilIncompletePct).toBe('number');
   });
+
+  it('eliminates camera-distance scoring drift: near camera (1.0m) and far camera (2.5m) yield identical depth', () => {
+    // Target physical compression: 5.5 cm depth at 110 BPM (cycle ~545ms, ~16 frames at 30fps)
+    // Standard adult bi-acromial shoulder breadth = 39.0 cm
+    const targetPhysicalDepthCm = 5.5;
+    const standardShoulderWidthCm = 39.0;
+    const compressionRatio = targetPhysicalDepthCm / standardShoulderWidthCm; // ~0.141025
+
+    const frameCount = 64; // ~4 full compression cycles
+
+    // Scenario A: Near camera (1.0m) — Trainee appears large in frame
+    // Shoulder width in frame = 0.30
+    const nearShoulderWidth = 0.30;
+    const nearWristExcursion = nearShoulderWidth * compressionRatio; // ~0.04231
+
+    const nearSequence: PoseLandmark[] = Array.from({ length: frameCount }, (_, i) => {
+      // Sinusoidal compression cycle
+      const phase = (i / 16) * 2 * Math.PI;
+      const cycleOffset = ((Math.sin(phase) + 1) / 2) * nearWristExcursion;
+
+      return {
+        frame: i,
+        timestamp_ms: i * 33.3,
+        points: [
+          { name: 'left_shoulder', x: 0.35, y: 0.25, z: 0, visibility: 0.99 },
+          { name: 'right_shoulder', x: 0.35 + nearShoulderWidth, y: 0.25, z: 0, visibility: 0.99 },
+          { name: 'left_wrist', x: 0.50, y: 0.55 + cycleOffset, z: 0, visibility: 0.99 },
+          { name: 'right_wrist', x: 0.50, y: 0.55 + cycleOffset, z: 0, visibility: 0.99 },
+        ],
+      };
+    });
+
+    // Scenario B: Far camera (2.5m) — Trainee appears 2.5x smaller in frame
+    // Both shoulder distance and wrist movement in pixel/frame coordinates shrink by 2.5x
+    const farDistanceFactor = 2.5;
+    const farShoulderWidth = nearShoulderWidth / farDistanceFactor; // 0.12
+    const farWristExcursion = nearWristExcursion / farDistanceFactor; // ~0.01692
+
+    const farSequence: PoseLandmark[] = Array.from({ length: frameCount }, (_, i) => {
+      const phase = (i / 16) * 2 * Math.PI;
+      const cycleOffset = ((Math.sin(phase) + 1) / 2) * farWristExcursion;
+
+      return {
+        frame: i,
+        timestamp_ms: i * 33.3,
+        points: [
+          { name: 'left_shoulder', x: 0.44, y: 0.25, z: 0, visibility: 0.99 },
+          { name: 'right_shoulder', x: 0.44 + farShoulderWidth, y: 0.25, z: 0, visibility: 0.99 },
+          { name: 'left_wrist', x: 0.50, y: 0.55 + cycleOffset, z: 0, visibility: 0.99 },
+          { name: 'right_wrist', x: 0.50, y: 0.55 + cycleOffset, z: 0, visibility: 0.99 },
+        ],
+      };
+    });
+
+    const nearResult = extractKinematics(nearSequence);
+    const farResult = extractKinematics(farSequence);
+
+    // Both near (1.0m) and far (2.5m) must compute target 5.5 cm depth (+/- 0.1 cm)
+    expect(nearResult.estimatedDepthCm).toBeCloseTo(5.5, 1);
+    expect(farResult.estimatedDepthCm).toBeCloseTo(5.5, 1);
+
+    // Drift between near and far camera captures must be virtually zero (< 0.1 cm)
+    const driftDelta = Math.abs(nearResult.estimatedDepthCm - farResult.estimatedDepthCm);
+    expect(driftDelta).toBeLessThan(0.1);
+  });
 });

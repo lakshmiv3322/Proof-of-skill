@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { evaluateSubmissionWithLandmarks } from './rubric-engine';
-import type { RubricConfig } from '@/types/database';
+import type { RubricConfig, PoseLandmark } from '@/types/database';
 
 const TEST_RUBRIC_CONFIG: RubricConfig = {
   total_weight: 100,
@@ -41,5 +41,58 @@ describe('RubricEngine Scoring Bands', () => {
       expect(delta.weight).toBeGreaterThan(0);
       expect(typeof delta.delta).toBe('string');
     }
+  });
+
+  it('guarantees identical rubric depth score at near (1m) and far (2.5m) camera distances', () => {
+    const targetPhysicalDepthCm = 5.5;
+    const standardShoulderWidthCm = 39.0;
+    const compressionRatio = targetPhysicalDepthCm / standardShoulderWidthCm;
+    const frameCount = 64;
+
+    // 1.0m Near capture
+    const nearShoulderWidth = 0.30;
+    const nearWristExcursion = nearShoulderWidth * compressionRatio;
+    const nearLandmarks: PoseLandmark[] = Array.from({ length: frameCount }, (_, i) => {
+      const phase = (i / 16) * 2 * Math.PI;
+      const cycleOffset = ((Math.sin(phase) + 1) / 2) * nearWristExcursion;
+      return {
+        frame: i,
+        timestamp_ms: i * 33.3,
+        points: [
+          { name: 'left_shoulder', x: 0.35, y: 0.25, z: 0, visibility: 0.99 },
+          { name: 'right_shoulder', x: 0.35 + nearShoulderWidth, y: 0.25, z: 0, visibility: 0.99 },
+          { name: 'left_wrist', x: 0.50, y: 0.55 + cycleOffset, z: 0, visibility: 0.99 },
+          { name: 'right_wrist', x: 0.50, y: 0.55 + cycleOffset, z: 0, visibility: 0.99 },
+        ],
+      };
+    });
+
+    // 2.5m Far capture
+    const farDistanceFactor = 2.5;
+    const farShoulderWidth = nearShoulderWidth / farDistanceFactor;
+    const farWristExcursion = nearWristExcursion / farDistanceFactor;
+    const farLandmarks: PoseLandmark[] = Array.from({ length: frameCount }, (_, i) => {
+      const phase = (i / 16) * 2 * Math.PI;
+      const cycleOffset = ((Math.sin(phase) + 1) / 2) * farWristExcursion;
+      return {
+        frame: i,
+        timestamp_ms: i * 33.3,
+        points: [
+          { name: 'left_shoulder', x: 0.44, y: 0.25, z: 0, visibility: 0.99 },
+          { name: 'right_shoulder', x: 0.44 + farShoulderWidth, y: 0.25, z: 0, visibility: 0.99 },
+          { name: 'left_wrist', x: 0.50, y: 0.55 + cycleOffset, z: 0, visibility: 0.99 },
+          { name: 'right_wrist', x: 0.50, y: 0.55 + cycleOffset, z: 0, visibility: 0.99 },
+        ],
+      };
+    });
+
+    const nearResult = evaluateSubmissionWithLandmarks('sub-near', TEST_RUBRIC_CONFIG, nearLandmarks);
+    const farResult = evaluateSubmissionWithLandmarks('sub-far', TEST_RUBRIC_CONFIG, farLandmarks);
+
+    // Both must achieve 100/100 on compression depth
+    expect(nearResult.criteriaScores['cpr-depth']).toBe(100);
+    expect(farResult.criteriaScores['cpr-depth']).toBe(100);
+    expect(nearResult.metrics.actualDepthCm).toBeCloseTo(5.5, 1);
+    expect(farResult.metrics.actualDepthCm).toBeCloseTo(5.5, 1);
   });
 });

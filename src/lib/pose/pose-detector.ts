@@ -3,7 +3,7 @@
 // Client-side MediaPipe BlazePose detector & frame analysis engine
 // ─────────────────────────────────────────────────────────────
 
-import { Pose, VERSION, type Results } from '@mediapipe/pose';
+import { Pose, type Results } from '@mediapipe/pose';
 import type { PoseLandmark, PosePoint } from '@/types/database';
 
 export const BLAZEPOSE_LANDMARK_NAMES: string[] = [
@@ -58,6 +58,7 @@ export interface FrameQualitySignal {
 export class PoseDetectorService {
   private pose: Pose | null = null;
   private isReady = false;
+  private initError: string | null = null;
   private offscreenCanvas: HTMLCanvasElement | null = null;
   private offscreenCtx: CanvasRenderingContext2D | null = null;
   private currentResults: Results | null = null;
@@ -66,9 +67,11 @@ export class PoseDetectorService {
     if (this.isReady && this.pose) return;
 
     try {
+      this.initError = null;
       this.pose = new Pose({
         locateFile: (file) => {
-          return `https://cdn.jsdelivr.net/npm/@mediapipe/pose@${VERSION}/${file}`;
+          // Self-hosted local origin to eliminate external CDN dependency & firewall blocks
+          return `/models/${file}`;
         },
       });
 
@@ -88,12 +91,18 @@ export class PoseDetectorService {
       await this.pose.initialize();
       this.isReady = true;
     } catch (err) {
-      console.warn('[PoseDetector] Failed to initialize MediaPipe Pose, falling back to mock processor:', err);
+      const msg = err instanceof Error ? err.message : String(err);
+      this.initError = `Failed to initialize self-hosted MediaPipe models: ${msg}`;
+      console.warn('[PoseDetector] Failed to initialize MediaPipe Pose from local origin:', err);
     }
   }
 
   getReady(): boolean {
     return this.isReady;
+  }
+
+  getError(): string | null {
+    return this.initError;
   }
 
   /**

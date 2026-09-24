@@ -111,16 +111,82 @@ function computeDTWMetrics(landmarks: PoseLandmark[]) {
     100
   ).toFixed(1);
 
-  const avgPeak =
-    peaks.length > 0
-      ? peaks.reduce((acc, idx) => acc + normalizedSeries[idx], 0) / peaks.length
-      : 0.9;
-  const avgTrough =
-    troughs.length > 0
-      ? troughs.reduce((acc, idx) => acc + normalizedSeries[idx], 0) / troughs.length
-      : 0.1;
-  const excursion = Math.max(0.1, avgPeak - avgTrough);
-  const actualDepthCm = +(excursion * 5.8).toFixed(2);
+  // ── ANATOMICALLY NORMALIZED COMPRESSION DEPTH ───────────────────
+  const STANDARD_BIACROMIAL_WIDTH_CM = 39.0;
+  const STANDARD_TORSO_LENGTH_CM = 48.0;
+
+  let totalShoulderDist = 0;
+  let shoulderFrames = 0;
+  let totalTorsoDist = 0;
+  let torsoFrames = 0;
+
+  for (const frame of landmarks) {
+    const pts = frame.points || [];
+    const ls = pts.find((p) => {
+      const n = (p.name || "").toLowerCase();
+      return n === "left_shoulder" || n === "point_11";
+    });
+    const rs = pts.find((p) => {
+      const n = (p.name || "").toLowerCase();
+      return n === "right_shoulder" || n === "point_12";
+    });
+    const lh = pts.find((p) => {
+      const n = (p.name || "").toLowerCase();
+      return n === "left_hip" || n === "point_23";
+    });
+    const rh = pts.find((p) => {
+      const n = (p.name || "").toLowerCase();
+      return n === "right_hip" || n === "point_24";
+    });
+
+    if (ls && rs && (ls.visibility ?? 1) > 0.25 && (rs.visibility ?? 1) > 0.25) {
+      const dist = Math.hypot(ls.x - rs.x, ls.y - rs.y);
+      if (dist > 0.005) {
+        totalShoulderDist += dist;
+        shoulderFrames++;
+      }
+    }
+
+    if (ls && rs && lh && rh && (lh.visibility ?? 1) > 0.25 && (rh.visibility ?? 1) > 0.25) {
+      const midShoulderX = (ls.x + rs.x) / 2;
+      const midShoulderY = (ls.y + rs.y) / 2;
+      const midHipX = (lh.x + rh.x) / 2;
+      const midHipY = (lh.y + rh.y) / 2;
+      const dist = Math.hypot(midShoulderX - midHipX, midShoulderY - midHipY);
+      if (dist > 0.005) {
+        totalTorsoDist += dist;
+        torsoFrames++;
+      }
+    }
+  }
+
+  const avgRawPeak =
+    peaks.length > 0 ? peaks.reduce((acc, idx) => acc + rawYSeries[idx], 0) / peaks.length : maxY;
+  const avgRawTrough =
+    troughs.length > 0 ? troughs.reduce((acc, idx) => acc + rawYSeries[idx], 0) / troughs.length : minY;
+  const rawExcursion = Math.max(0.0001, avgRawPeak - avgRawTrough);
+
+  let actualDepthCm: number;
+  if (shoulderFrames > 0) {
+    const avgShoulderDist = totalShoulderDist / shoulderFrames;
+    const cmPerUnit = STANDARD_BIACROMIAL_WIDTH_CM / avgShoulderDist;
+    actualDepthCm = +(rawExcursion * cmPerUnit).toFixed(2);
+  } else if (torsoFrames > 0) {
+    const avgTorsoDist = totalTorsoDist / torsoFrames;
+    const cmPerUnit = STANDARD_TORSO_LENGTH_CM / avgTorsoDist;
+    actualDepthCm = +(rawExcursion * cmPerUnit).toFixed(2);
+  } else {
+    const avgPeak =
+      peaks.length > 0
+        ? peaks.reduce((acc, idx) => acc + normalizedSeries[idx], 0) / peaks.length
+        : 0.9;
+    const avgTrough =
+      troughs.length > 0
+        ? troughs.reduce((acc, idx) => acc + normalizedSeries[idx], 0) / troughs.length
+        : 0.1;
+    const excursion = Math.max(0.1, avgPeak - avgTrough);
+    actualDepthCm = +(excursion * 5.8).toFixed(2);
+  }
 
   let totalAngleDev = 0;
   let validAngleFrames = 0;

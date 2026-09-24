@@ -122,9 +122,23 @@ export function VideoCapture({ onBack, onComplete }: VideoCaptureProps) {
   const allChecksPassed = checks.lighting && checks.framing && checks.occlusion;
 
   // Initialize BlazePose on mount
-  useEffect(() => {
-    poseDetector.init().catch((e) => console.warn('[poseDetector] init error:', e));
+  const [poseModelError, setPoseModelError] = useState<string | null>(null);
+
+  const initPoseDetector = useCallback(async () => {
+    try {
+      setPoseModelError(null);
+      await poseDetector.init();
+      const err = poseDetector.getError();
+      if (err) setPoseModelError(err);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setPoseModelError(`Failed to load local pose model: ${msg}`);
+    }
   }, []);
+
+  useEffect(() => {
+    initPoseDetector();
+  }, [initPoseDetector]);
 
   // Request real camera stream via getUserMedia
   useEffect(() => {
@@ -546,6 +560,22 @@ export function VideoCapture({ onBack, onComplete }: VideoCaptureProps) {
           </div>
         )}
       </div>
+
+      {/* Clear error alert if local pose models fail to load */}
+      {poseModelError && (
+        <div className="mb-4 flex items-center justify-between gap-3 p-3.5 rounded-lg border border-destructive/40 bg-destructive/10 text-destructive text-xs">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="h-4 w-4 shrink-0" />
+            <div>
+              <p className="font-semibold">Local MediaPipe Pose Model Offline</p>
+              <p className="text-[11px] text-muted-foreground mt-0.5">{poseModelError}</p>
+            </div>
+          </div>
+          <Button size="sm" variant="outline" className="h-7 text-xs border-destructive/30 hover:bg-destructive/10 shrink-0" onClick={initPoseDetector}>
+            Retry Loading Models
+          </Button>
+        </div>
+      )}
 
       {/* ── Viewport Card ─────────────────────────────────── */}
       <Card className="relative overflow-hidden bg-slate-950 border-2 border-border/50 aspect-[4/3] sm:aspect-video mb-6 flex flex-col items-center justify-center shadow-xl">
